@@ -1,0 +1,4 @@
+{
+  "title": "Architecture",
+  "pages": ["backend-architecture", "authentication-authorization", "data-model", "deployment-configuration"]
+}

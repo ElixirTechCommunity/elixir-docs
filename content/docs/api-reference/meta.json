@@ -1,0 +1,4 @@
+{
+  "title": "API Reference",
+  "pages": ["authentication", "events", "clubs", "blogs", "mentors", "users", "testimonials", "health"]
+}
