@@ -1,10 +1,159 @@
 ---
 title: Backend Quickstart
-description: Set up the ElixirV4 backend for local development.
+description: Run the ElixirV4 Node.js backend locally with PostgreSQL and Prisma.
 ---
 
-The verified backend quickstart will be written in a later documentation phase.
+Run the backend locally with PostgreSQL, apply the existing Prisma migrations, and verify an HTTP response. You do not need to install or run the frontend for this check.
 
-<Callout type="note" title="Placeholder">
-This page intentionally contains no setup commands until they have been checked against the current application repository.
+## Prerequisites
+
+- Git, Node.js, and npm. The backend does not pin a Node.js or npm version. Its locked Prisma 6.15.0 packages require Node.js 18.18 or newer; the backend CI job selects Node.js 20.
+- A running local PostgreSQL server and a login role with permission to create databases. Prisma's development migration command also creates a temporary shadow database, so the role needs `CREATEDB` permission (or superuser privileges).
+- `createdb`, from the PostgreSQL client tools, if you use the database-creation command below; you can also create the database with your PostgreSQL administration tool.
+- `curl` for the health check.
+
+Prisma is installed with the backend dependencies. Google credentials are needed only for Google sign-in; no Google account configuration or frontend server is required for basic startup.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/package-lock.json">backend/package-lock.json</SourceReference>
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/.github/workflows/ci.yml">.github/workflows/ci.yml</SourceReference>
+
+## Get the code
+
+Clone the repository and enter the separate backend package:
+
+```sh
+git clone https://github.com/vaibhavxtripathi/ElixirV4.git
+cd ElixirV4/backend
+```
+
+Install the dependencies from the committed npm lockfile:
+
+```sh
+npm ci
+```
+
+If you already have a checkout, enter its `backend/` directory and run the same installation command. Run all subsequent npm commands from that directory.
+
+<TechnicalDebt>
+The backend is a separate npm package. `CONTRIBUTING.md` lists `npm run dev:backend`, but the root package does not define that script. Use `npm run dev` from `backend/`; the root `npm run dev` starts the frontend.
+</TechnicalDebt>
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/package.json">backend/package.json</SourceReference>
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</SourceReference>
+
+## Configure local environment variables
+
+Create `backend/.env` with the following configuration. Replace `YOUR_POSTGRES_USER` and `YOUR_POSTGRES_PASSWORD` with your local PostgreSQL credentials. Percent-encode special characters in the username or password when including them in the URL.
+
+```ini title="backend/.env"
+DATABASE_URL="postgresql://YOUR_POSTGRES_USER:YOUR_POSTGRES_PASSWORD@localhost:5432/elixir_db"
+```
+
+`DATABASE_URL` is the only application setting required for this startup and health check. The server connects Prisma before it listens. The current import chain loads `.env` through `src/utils/jwt.ts`; run the backend from `backend/` so it finds this file.
+
+Add `JWT_SECRET` to the same file before testing registration, login, or authenticated requests. It is used to sign and verify tokens; it has no default and is not validated at startup.
+
+```ini title="backend/.env — add for authentication"
+JWT_SECRET="replace-with-a-long-local-development-secret"
+```
+
+The remaining settings are optional for this Quickstart:
+
+| Setting | When it matters |
+| --- | --- |
+| `PORT` | Listening port; defaults to `3001`. Set it to an available port number to override the default. |
+| `NODE_ENV` | Logging, OAuth cookie behavior, and development reuse of the shared Prisma client. The development command sets `development` through `nodemon.json`. |
+| `GOOGLE_CLIENT_ID` | Google client ID for Google sign-in; defaults to an empty string. |
+| `GOOGLE_CLIENT_SECRET` | Google client secret for the browser OAuth flow; defaults to an empty string. |
+| `GOOGLE_REDIRECT_URI`, `GOOGLE_REDIRECT_URL` | OAuth callback URL. The implementation uses the first nonempty value in this order, or an empty string if neither is set. |
+| `NEXT_PUBLIC_FRONTEND_BASE_URL`, `FRONTEND_BASE_URL`, `FRONTEND_URL` | Frontend base URL for OAuth redirects, in this precedence order. The fallback is `http://localhost:3000` outside production and an empty string in production. |
+| `ALLOWED_ORIGINS` | Comma-separated additional browser origins. Unset means no additions to the built-in CORS allowlist, which already includes `http://localhost:3000` and `http://127.0.0.1:3000`. |
+
+<Callout type="important" title="Use local configuration">
+`env.example` includes production values and integration placeholders; they are not all startup requirements. Its `NEXT_PUBLIC_API_URL` setting is consumed by the frontend, not the backend. Use the minimal `.env` above for this check. `backend/.env` is ignored by Git; keep credentials out of commits.
 </Callout>
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/env.example">backend/env.example</SourceReference>
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/utils/jwt.ts">backend/src/utils/jwt.ts</SourceReference>
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/authController.ts">backend/src/controllers/authController.ts</SourceReference>
+
+## Prepare PostgreSQL and Prisma
+
+Start PostgreSQL using your installation's service controls. Create an empty database named `elixir_db`, matching the URL above. With the PostgreSQL client tools, replace `YOUR_POSTGRES_USER` and run:
+
+```sh
+createdb --host=localhost --port=5432 --username=YOUR_POSTGRES_USER elixir_db
+```
+
+Use the same host, port, and role as `DATABASE_URL`. If you already created this local database, skip the creation command.
+
+Generate the Prisma client and apply the checked-in migrations:
+
+```sh
+npm run db:generate
+npm run db:migrate
+```
+
+These scripts run `prisma generate` and `prisma migrate dev` using `prisma/schema.prisma`. The six migrations in `prisma/migrations/` prepare the schema; no seed data is needed for the health check. On a fresh database, the migration command applies those migrations without needing a new migration name.
+
+<Callout type="warning" title="Use a development database">
+`prisma migrate dev` uses a shadow database and can request a reset when it detects drift. Use an empty local database for this setup, and do not point `DATABASE_URL` at production or a database containing data you need to keep.
+</Callout>
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/prisma/schema.prisma">backend/prisma/schema.prisma</SourceReference>
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/tree/main/backend/prisma/migrations">backend/prisma/migrations/</SourceReference>
+
+## Start and verify the backend
+
+Run the development server:
+
+```sh
+npm run dev
+```
+
+`nodemon` runs `src/server.ts` through `ts-node`. The default port is `3001`; `PORT` overrides it. The process should remain running. There is no application-level “server started” log: use the health check to confirm it is listening.
+
+<ApiEndpoint method="GET" path="/health" auth="None">
+Check that the local backend responds.
+</ApiEndpoint>
+
+In another terminal, verify the application responds:
+
+```sh
+curl -i http://localhost:3001/health
+```
+
+Expect HTTP `200 OK` with this JSON body:
+
+```json
+{
+  "status": "OK",
+  "message": "Server is working!"
+}
+```
+
+If you changed `PORT`, use that port in the URL. The local route is `/health`, without an `/api` prefix.
+
+The health route reports application availability. This local server starts listening only after `prisma.$connect()` succeeds, so a response also confirms that its initial database connection completed. The route does not query PostgreSQL or verify that migrations were applied; it does not prove ongoing database connectivity.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/nodemon.json">backend/nodemon.json</SourceReference>
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/server.ts">backend/src/server.ts</SourceReference>
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/app.ts">backend/src/app.ts</SourceReference>
+
+## If setup does not complete
+
+- If startup reports `Failed to start server:`, check that PostgreSQL is running, the database exists, and the credentials in `DATABASE_URL` are correct. Run from `backend/` and check that `.env` is in that directory.
+- If migration fails while creating a shadow database, check that the PostgreSQL role has `CREATEDB` permission.
+- If Prisma reports a missing generated client, rerun `npm run db:generate`, then retry the failed command. The generator may need network access to download Prisma engines.
+- If startup reports `EADDRINUSE`, set `PORT` in `.env` to an available port and restart. Use that port in the health-check URL.
+
+## Next steps
+
+Read [Backend Architecture](../architecture/backend-architecture.mdx) to understand the runtime flow, [Authentication & Authorization](../architecture/authentication-authorization.mdx) before changing access control, and [Data Model](../architecture/data-model.mdx) before changing Prisma models. Use the [API Reference](../api-reference/authentication.mdx) for route-specific behavior.

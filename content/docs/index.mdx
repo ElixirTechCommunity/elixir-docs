@@ -1,10 +1,16 @@
 ---
 title: Introduction
-description: A concise technical reference for ElixirV4 contributors and API consumers.
+description: Technical documentation for the ElixirV4 backend, its contributors, and API consumers.
 ---
 
-ElixirV4 is the Elixir Community application. This documentation records the implementation that exists today and is intended for contributors and API consumers.
+ElixirV4 is the fourth generation of the Elixir Community website. Its backend provides authentication, role-based access control, clubs, events and registrations, blog publishing, mentors, testimonials, and user administration.
 
-Start with [Backend Quickstart](./getting-started/backend-quickstart.mdx) when it is available, or browse the [API Reference](./api-reference/authentication.mdx).
+This documentation covers the backend as currently implemented: local setup, runtime structure, authentication, the data model, and HTTP API behavior. It is for contributors maintaining the application and developers integrating with its API.
 
-Documentation content is being added in phases. Pages marked as placeholders establish the navigation and authoring structure; they do not describe unverified behavior.
+Start with the [Backend Quickstart](./getting-started/backend-quickstart.mdx) to run the backend locally. Continue with [Backend Architecture](./architecture/backend-architecture.mdx) to understand its runtime structure. Use the [API Reference](./api-reference/authentication.mdx) for exact endpoint behavior, request and response formats, and authorization requirements.
+
+Documentation is being published in phases. Pages marked as placeholders are not yet complete; they do not establish an API contract.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/README.md">README.md</SourceReference>
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/app.ts">backend/src/app.ts</SourceReference>
