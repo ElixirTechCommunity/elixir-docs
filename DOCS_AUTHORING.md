@@ -25,5 +25,5 @@ Write concise, source-backed documentation. The repository structure supplies pa
 ## Trust and diagrams
 
 - Add `<SourceReference href="...">backend/path</SourceReference>` at the end of implementation-specific sections when it helps a contributor inspect the code. Use a repository link when stable; omit `href` while the link is unknown.
-- Diagrams use Mermaid. Add the renderer only when the first source-backed diagram is written; use the official Fumadocs Mermaid integration and keep diagrams focused enough for narrow screens. The planned diagrams are request flow, Google OAuth, and Prisma relationships.
+- Diagrams use fenced `mermaid` blocks, transformed through the official Fumadocs integration. The renderer follows the site theme and permits horizontal scrolling on narrow screens. `npm run build` validates Mermaid syntax before compiling the site; keep diagrams focused and source-backed. The architecture diagrams cover request flow, Google OAuth, and Prisma relationships.
 - Use “ElixirV4” for the application and “Elixir Community” for the organization.

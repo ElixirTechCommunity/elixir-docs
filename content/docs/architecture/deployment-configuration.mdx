@@ -1,6 +1,133 @@
 ---
 title: Deployment & Configuration
-description: Current deployment assumptions and application configuration.
+description: Local and serverless execution, environment fallbacks, and unverified production routing.
 ---
 
-This page will document verified deployment and configuration behavior.
+The repository contains a local Node server and checked-in Vercel wrappers around the same Express application. Those files establish execution paths, but they do not conclusively establish the public production route contract. Use [Backend Quickstart](../getting-started/backend-quickstart.mdx) for local setup and [Backend Architecture](./backend-architecture.mdx) for the request pipeline.
+
+## Runtime modes
+
+| Path | Runtime responsibility |
+| --- | --- |
+| `npm run dev` in `backend/` | Nodemon runs `src/server.ts` through `ts-node`, watches `src`, and sets `NODE_ENV=development`. |
+| `src/server.ts` | Connects the shared Prisma client before listening; reads `PORT` with a fallback of `3001`; disconnects the shared client on `SIGTERM`. |
+| `src/app.ts` | Constructs the Express application and mounts routes; does not listen itself. |
+| `api/index.ts` and `api/[...all].ts` | Import that application, adjust `req.url`, and invoke a `serverless-http` adapter without starting the local server. |
+| `npm run start` | Requests execution of `node dist/server.js`; the checked-in compiler configuration does not produce that path. |
+
+The server waits for an initial database connection; the wrappers have no corresponding explicit connection gate. `/health` itself does not query PostgreSQL, so it is not a continuous database health probe.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/server.ts">backend/src/server.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/nodemon.json">backend/nodemon.json</SourceReference>
+
+## Environment variables
+
+These names come from current runtime reads, the Prisma datasource, and frontend consumers. A setting marked conditional is needed for the named feature, not for every backend request. There is no centralized startup configuration validator.
+
+| Variable | Purpose and requirement | Implemented fallback / scope |
+| --- | --- | --- |
+| `DATABASE_URL` | Required PostgreSQL connection URL for Prisma; required for local server startup. | No default in the datasource. Used by Prisma tooling and database access. |
+| `JWT_SECRET` | Required to sign/verify application JWTs. | No default; captured by `src/utils/jwt.ts` at import time. Missing configuration does not itself stop startup. |
+| `GOOGLE_CLIENT_ID` | Required for Google ID-token sign-in and browser OAuth. | Empty string; captured by the authentication controller at import time. |
+| `GOOGLE_CLIENT_SECRET` | Required for browser OAuth. | Empty string; not required by the ID-token verification branch. |
+| `GOOGLE_REDIRECT_URI` | Backend callback URI for browser OAuth. | First choice; falls back to `GOOGLE_REDIRECT_URL`, then empty string. |
+| `GOOGLE_REDIRECT_URL` | Alias for the backend callback URI. | Used only if `GOOGLE_REDIRECT_URI` is empty/unset. |
+| `NEXT_PUBLIC_FRONTEND_BASE_URL` | Frontend destination for browser OAuth redirects; read by the backend despite its name. | First choice in the frontend destination chain below. |
+| `FRONTEND_BASE_URL` | Alias for the OAuth frontend destination. | Second choice. |
+| `FRONTEND_URL` | Further alias for the OAuth frontend destination. | Third choice, then `http://localhost:3000` outside production or empty string in production. |
+| `ALLOWED_ORIGINS` | Optional additional CORS browser origins. | Comma-split, trimmed, empty entries removed; added to the fixed allowlist on each request. |
+| `NODE_ENV` | Selects logging format, OAuth cookie `Secure`, frontend destination default, and shared Prisma caching behavior. | Only the exact value `production` selects production branches. Nodemon supplies `development`; the backend code provides no general default. |
+| `PORT` | Local/server listening target. | Passed to `app.listen` as `process.env.PORT || 3001`; no explicit parsing or validation. No listener in the wrappers. |
+
+`dotenv.config()` runs in `src/utils/jwt.ts`. The Express import chain loads this utility before the authentication controller captures its configuration. By default it reads `.env` from the process working directory, which is why local commands run from `backend/`. Hosted environments can supply variables directly.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/utils/jwt.ts">backend/src/utils/jwt.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/prisma/schema.prisma">backend/prisma/schema.prisma</SourceReference>
+
+### OAuth destinations
+
+Callback URI precedence is `GOOGLE_REDIRECT_URI` → `GOOGLE_REDIRECT_URL` → empty string. Frontend base precedence is `NEXT_PUBLIC_FRONTEND_BASE_URL` → `FRONTEND_BASE_URL` → `FRONTEND_URL` → the environment-dependent default. Each uses the first nonempty value; these values are captured at module initialization.
+
+The browser OAuth start controller can override the configured frontend base using the `Origin` header, or `Referer` if `Origin` is absent. It recognizes three hostnames: `www.elixircommunity.in` maps to its HTTPS origin, `dev.elixircommunity.in` maps to its HTTPS origin, and `elixircommunity.in` maps to `https://www.elixircommunity.in`. Other or unparsable hostnames leave the configured/default base in place.
+
+It stores the selected origin in OAuth state. The callback uses that state's origin before the configured base and fails if neither is nonempty. These are frontend redirect destinations, not verified backend API base URLs. See [Authentication & Authorization](./authentication-authorization.mdx#google-browser-oauth) for state handling.
+
+`backend/env.example` includes both callback aliases and two frontend aliases, but omits the highest-precedence `NEXT_PUBLIC_FRONTEND_BASE_URL`. It also contains `NEXT_PUBLIC_API_URL`, which is **frontend configuration**: `src/lib/api.ts` and several frontend page consumers use it, falling back to `http://localhost:3001`. The backend does not read it. Merely placing it in `backend/.env` does not configure a separately started frontend process.
+
+<TechnicalDebt>
+OAuth accepts several configuration aliases, while `env.example` does not show the full runtime precedence and mixes frontend and backend settings. An earlier alias can override a value a contributor expects to take effect. Read the runtime chain when diagnosing redirects; the example file is not a complete configuration contract.
+</TechnicalDebt>
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/authController.ts">backend/src/controllers/authController.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/env.example">backend/env.example</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/src/lib/api.ts">src/lib/api.ts</SourceReference>
+
+## CORS behavior
+
+The Express application uses custom CORS middleware. Its fixed allowlist contains:
+
+- `https://elixir-v4.vercel.app`
+- `https://dev.elixircommunity.in`
+- `https://elixircommunity.in`
+- `https://www.elixircommunity.in`
+- `http://localhost:3000`
+- `http://127.0.0.1:3000`
+
+`ALLOWED_ORIGINS` adds exact origin strings; it does not replace that list and does not expand wildcards. There is no separate development-only CORS branch: localhost entries remain in the list in production.
+
+Matching origins receive an echoed `Access-Control-Allow-Origin`, credentials permission, methods `GET,POST,PUT,DELETE,OPTIONS`, and headers `Content-Type,Authorization`. The middleware also adds `Vary: Origin` and no-cache headers. Later controllers can replace response cache headers.
+
+Every preflight `OPTIONS` response ends with HTTP 200, including requests from unmatched origins; unmatched origins receive no permission headers. Other requests continue through the application even when their origin is absent or unlisted. CORS is browser access control, not backend authentication or a general request rejection mechanism.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/app.ts">backend/src/app.ts</SourceReference>
+
+## Prisma lifecycle
+
+`src/lib/prisma.ts` reuses a client stored on the Node global object when available, or creates one with warning/error logging. Outside production it stores the instance on that global object. Authentication, club, and user controllers each create a separate module-scoped client; event, blog, mentor, and testimonial controllers use the shared helper.
+
+The local server's explicit connect and `SIGTERM` disconnect apply only to the helper's client. Serverless wrappers import the application and let controller database access use the clients without that local lifecycle. See the [Prisma client Technical Debt note](./backend-architecture.mdx#controllers-and-persistence) for the consequence of multiple instances. This code does not establish a deployment-wide shared connection pool.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/lib/prisma.ts">backend/src/lib/prisma.ts</SourceReference>
+
+## Build and start
+
+Run backend scripts from the separate `backend/` npm package. The root package scripts operate on the frontend.
+
+| Script | Operational meaning |
+| --- | --- |
+| `dev` | `nodemon src/server.ts`; uses the TypeScript execution setup described above. |
+| `build` | `prisma generate && tsc`; generates the client, then compiles TypeScript. Does not migrate the database. |
+| `start` | `node dist/server.js`; assumes an output location not configured by the current build. |
+| `db:generate` | `npx prisma generate`; regenerates the model client without applying migrations. |
+| `db:migrate` | `npx prisma migrate dev`; development migration workflow, not a production migration script. |
+| `db:studio` | Opens Prisma Studio for database inspection. |
+
+<TechnicalDebt>
+`start` expects `dist/server.js`, but `tsconfig.json` has `outDir` and `rootDir` commented out. Default TypeScript emission is beside its inputs, so the scripts do not establish a working build-then-start deployment path. Contributors should not infer a deployable `dist/` artifact from the script names.
+</TechnicalDebt>
+
+Backend CI installs dependencies and runs `npm test --if-present`. The backend package defines no test script, and this job does not run its build or migrations. CI success therefore does not verify compiled startup or Vercel routing.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/package.json">backend/package.json</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/tsconfig.json">backend/tsconfig.json</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/.github/workflows/ci.yml">.github/workflows/ci.yml</SourceReference>
+
+## Production routing
+
+<TechnicalDebt>
+The checked-in serverless wrappers retain or add an `/api` prefix, while Express mounts domain routes and `/health` without it. No checked-in rewrite reconciles these paths. A working public production base URL and route contract remain unverified; contributors cannot infer them from local mounts or function filenames.
+</TechnicalDebt>
+
+The relevant code and configuration establish the following:
+
+1. Express matches `/auth`, `/events`, and the other unprefixed resource mounts.
+2. Both wrappers read `req.url`, default it to `/`, and prepend `/api` unless it already starts with `/api`. They then pass the request to `serverless-http`. The comment about Vercel stripping the prefix does not change Express's actual mounts.
+3. `backend/vercel.json` contains header rules for `/api/(.*)`, with no routes or rewrites. Its static origin header is a comma-separated list, unlike Express's single echoed origin; configuration presence does not prove what header a deployed response ultimately serves.
+4. The frontend joins paths such as `/auth/me` to `NEXT_PUBLIC_API_URL`, defaulting locally to `http://localhost:3001`. `next.config.ts` has no API rewrite. An example environment value does not establish the deployed value or resolve the wrapper mismatch.
+
+The repository does not include hosted project settings or verified production request traces. The precise public dispatch, request URL seen by the wrappers, and effective response headers therefore remain unresolved here. This page documents the checked-in code path, not a guessed `/api/*` contract. The future [Known Limitations](../known-limitations.mdx) page will centralize architectural issues.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/api/index.ts">backend/api/index.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/api/%5B...all%5D.ts">backend/api/[...all].ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/vercel.json">backend/vercel.json</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/next.config.ts">next.config.ts</SourceReference>

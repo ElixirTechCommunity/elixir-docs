@@ -3,6 +3,7 @@ import type { MDXComponents } from 'mdx/types';
 import { ApiEndpoint } from './mdx/api-endpoint';
 import { SourceReference } from './mdx/source-reference';
 import { TechnicalDebt } from './mdx/technical-debt';
+import { Mermaid } from './mdx/mermaid';
 
 export function getMDXComponents(components?: MDXComponents) {
   return {
@@ -10,6 +11,7 @@ export function getMDXComponents(components?: MDXComponents) {
     ApiEndpoint,
     SourceReference,
     TechnicalDebt,
+    Mermaid,
     ...components,
   } satisfies MDXComponents;
 }
