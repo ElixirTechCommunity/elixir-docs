@@ -20,7 +20,16 @@ export function Mermaid({ chart }: { chart: string }) {
           startOnLoad: false,
           securityLevel: 'strict',
           fontFamily: 'inherit',
-          theme: resolvedTheme === 'dark' ? 'dark' : 'default',
+          theme: 'base',
+          themeVariables: resolvedTheme === 'dark' ? {
+            darkMode: true, background: '#1b1821', primaryColor: '#30243f',
+            primaryTextColor: '#eee8f5', primaryBorderColor: '#9478b3',
+            lineColor: '#b5a4c8', secondaryColor: '#262330', tertiaryColor: '#201d28',
+          } : {
+            background: '#ffffff', primaryColor: '#f1eaf8', primaryTextColor: '#282032',
+            primaryBorderColor: '#8a699e', lineColor: '#6f5b80',
+            secondaryColor: '#f6f3f9', tertiaryColor: '#faf8fc',
+          },
           flowchart: { useMaxWidth: false },
           sequence: { useMaxWidth: false },
           er: { useMaxWidth: false },
@@ -37,8 +46,8 @@ export function Mermaid({ chart }: { chart: string }) {
   }, [chart, id, key, resolvedTheme]);
 
   return (
-    <figure className="not-prose my-6 min-w-0 rounded-lg border border-fd-border bg-fd-card p-4">
-      <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Scrollable architecture diagram">
+    <figure className="docs-diagram not-prose">
+      <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Scrollable diagram">
         {result?.key === key && result.svg ? (
           <div className="[&_svg]:mx-auto" dangerouslySetInnerHTML={{ __html: result.svg }} />
         ) : (

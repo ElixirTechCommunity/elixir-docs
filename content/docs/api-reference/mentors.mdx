@@ -1,6 +1,106 @@
 ---
 title: Mentors
-description: Mentor API endpoints and request contracts.
+description: Mentor profiles, administrative mutations, and authenticated like toggling.
 ---
 
-Verified API reference content will be added in a later phase.
+Paths follow the [reference conventions](./authentication.mdx#reference-conventions). A mentor profile contains `id`, `name`, `expertise`, `imageUrl`, `linkedInUrl`, and `clubId`. A mentor belongs to a club but is not linked to a user account; see [Data Model](../architecture/data-model.mdx#relationships).
+
+## List mentors
+
+<ApiEndpoint method="GET" path="/mentors" auth="None">
+Return mentor profiles with their club and total like count.
+</ApiEndpoint>
+
+No pagination or validated query parameters. HTTP **200**:
+
+```json
+{
+  "mentors": [{
+    "id": "illustrative-mentor-id",
+    "name": "Alex Morgan",
+    "expertise": "Web development",
+    "imageUrl": "https://example.com/mentor.png",
+    "linkedInUrl": "",
+    "clubId": "illustrative-club-id",
+    "club": {"name": "Example Coding Club", "imageUrl": null},
+    "likeCount": 0
+  }]
+}
+```
+
+Profiles are sorted by name ascending. `_count` is replaced with `likeCount`, and the controller sets `Cache-Control: public, s-maxage=300, stale-while-revalidate=600` on success. Its catch branch also returns **200**, with `{ "mentors": [] }`, after logging the error. An empty list therefore does not prove the directory is empty.
+
+## Toggle a like
+
+<ApiEndpoint method="POST" path="/mentors/:mentorId/like" auth="Required">
+Like an unliked mentor or remove the current user's existing like.
+</ApiEndpoint>
+
+No role restriction, request body, or Zod parameter validator. `mentorId` identifies the mentor; the user comes from the token. The controller checks mentor existence, then the unique `(userId, mentorId)` pair. The same endpoint performs both operations; there is no separate unlike route.
+
+HTTP **200** returns one of:
+
+```json
+{"message":"Mentor liked successfully","liked":true,"likeCount":1}
+```
+
+```json
+{"message":"Mentor unliked successfully","liked":false,"likeCount":0}
+```
+
+`liked` describes the resulting relationship for this user; `likeCount` is the mentor's total, counted after the write. Repeating the request toggles again rather than ensuring a fixed liked state. The lookup, write, and count are separate operations; concurrent requests can hit the unique constraint or other caught failures.
+
+**Errors:** middleware 401; controller 401 `Authentication required` if no user identifier is available; 404 `Mentor not found`; 500 `Error toggling mentor like`.
+
+## List the current user's liked mentors
+
+<ApiEndpoint method="GET" path="/mentors/liked" auth="Required">
+Return mentor profiles liked by the token's user.
+</ApiEndpoint>
+
+No role restriction, validated query, or explicit ordering. HTTP **200** returns `{ "likedMentors": [...] }`. Items have the same profile, selected club, and `likeCount` fields as public listing. They are flattened mentor objects, not `MentorLike` records; `_count` is set to `undefined` and omitted from JSON. **Errors:** middleware 401; controller 401 `Authentication required`; 500 `Error fetching liked mentors`.
+
+## Create a mentor
+
+<ApiEndpoint method="POST" path="/mentors" auth="Role required">
+Create a mentor profile attached to an existing club.
+</ApiEndpoint>
+
+**Authorization:** `ADMIN`. Zod requires `name` (nonempty string), `expertise` (string, minimum two characters), and `clubId` (nonempty string). `imageUrl` is an optional URL in the schema but required by the controller. Optional `linkedInUrl` is read from the original body and defaults to `""` when null/absent; it has no schema URL/type validation. Send a string for this persisted string field.
+
+```http
+POST /mentors
+Authorization: Bearer <admin-jwt>
+Content-Type: application/json
+
+{"name":"Alex Morgan","expertise":"Web development","imageUrl":"https://example.com/mentor.png","clubId":"illustrative-club-id"}
+```
+
+HTTP **201**: `{ "mentor": ... }`, containing profile scalars and `club: { name }`, without a like count. **Errors:** middleware 401/403; 400 validation or `All fields are required`; 500 `Error creating mentor`, including an unknown club foreign key.
+
+<TechnicalDebt>
+Creation makes `imageUrl` optional in Zod but requires it in the controller. Both create/update controllers also read `linkedInUrl`, which their schemas do not validate. Because validation preserves the original body, this extra field reaches persistence; callers must not treat the schema as a complete field whitelist.
+</TechnicalDebt>
+
+## Update a mentor
+
+<ApiEndpoint method="PUT" path="/mentors/:id" auth="Role required">
+Update selected profile fields or club association.
+</ApiEndpoint>
+
+**Authorization:** `ADMIN`. Zod requires nonempty path `id`; all body fields are optional: `name` (nonempty), `expertise` (minimum two characters), `imageUrl` (URL), and `clubId` (nonempty). The controller also reads `linkedInUrl` without schema validation. Omitted fields are passed as `undefined` and left unchanged by Prisma. An empty object passes validation; `null` is not accepted for the schema's string fields.
+
+HTTP **200**: `{ "mentor": ... }`, with profile scalars and `club: { name }`. **Errors:** middleware 401/403; 400 validation; 500 `Error updating mentor`, including unknown mentor/club identifiers. There is no dedicated not-found pre-check.
+
+## Delete a mentor
+
+<ApiEndpoint method="DELETE" path="/mentors/:id" auth="Role required">
+Delete a mentor and its database-cascaded likes.
+</ApiEndpoint>
+
+**Authorization:** `ADMIN`. Zod requires a nonempty `id`; no body is used. HTTP **200**: `{ "message": "Mentor deleted successfully" }`. The like foreign key uses `ON DELETE CASCADE`. **Errors:** middleware 401/403; 400 validation; 500 `Error deleting mentor`, including an unknown ID.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/routes/mentors.ts">backend/src/routes/mentors.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/validators/mentors.ts">backend/src/validators/mentors.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/mentorController.ts">backend/src/controllers/mentorController.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/prisma/migrations/20251025152715_add_mentor_likes/migration.sql">backend/prisma/migrations/20251025152715_add_mentor_likes/migration.sql</SourceReference>

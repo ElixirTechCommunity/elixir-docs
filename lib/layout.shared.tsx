@@ -1,11 +1,15 @@
 import type { BaseLayoutProps } from 'fumadocs-ui/layouts/shared';
-import { appName } from './shared';
 
 export function baseOptions(): BaseLayoutProps {
   return {
     nav: {
-      // JSX supported
-      title: appName,
+      url: '/docs',
+      title: (
+        <span className="docs-brand">
+          <span className="docs-brand-name">Elixir<span className="docs-brand-version">V4</span></span>
+          <span className="docs-brand-caption">Developer documentation</span>
+        </span>
+      ),
     },
   };
 }

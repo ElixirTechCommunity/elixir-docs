@@ -1,10 +1,159 @@
 ---
 title: Authentication
-description: Authentication API endpoints and implementation notes.
+description: Password and Google sign-in, identity lookup, and browser OAuth contracts.
 ---
 
-Endpoint details will be added only after they are verified against the current implementation.
+These routes are mounted at `/auth`. Read [Authentication & Authorization](../architecture/authentication-authorization.mdx) for JWT, role, ownership, and Google-flow architecture.
 
-## Endpoint authoring pattern
+## Reference conventions
 
-Future endpoint sections use a short summary, an endpoint header, parameters or request fields when applicable, example requests and responses, status codes, and implementation notes.
+Endpoint paths in this reference are relative to the **Express application**, without an `/api` prefix. Local requests use a base such as `http://localhost:3001`. The public serverless base-path contract remains [unverified](../architecture/deployment-configuration.mdx#production-routing); examples do not establish production URLs.
+
+Protected endpoints use `Authorization: Bearer <application-jwt>`. The shared middleware extracts the second space-separated header segment without checking the scheme; the blog-detail controller has its own stricter `Bearer ` check. Missing credentials return HTTP 401 with `{ "message": "Access token required" }`; failed verification returns `{ "message": "Invalid or expired token" }`. Role rejection returns HTTP 403 with `{ "message": "Forbidden" }`. Roles come from the issued token, not a fresh database lookup.
+
+Where a route uses Zod, schema failures return HTTP 400 with `{ "message": "Validation error", "errors": [...] }`, where `errors` contains Zod issues. The middleware checks the request but does not replace it with parsed values. JSON bodies use `Content-Type: application/json`. Global middleware can reject requests before their controllers, and errors that escape local handling use Express's default behavior; see [Backend Architecture](../architecture/backend-architecture.mdx#responses-and-errors).
+
+Examples use illustrative IDs, profiles, and token placeholders. They are response-shape examples, not recorded production responses. Date/time values serialize as JSON strings; nullable fields are shown as `null` where appropriate. Response field lists below include scalar model fields only when the controller actually returns them.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/middleware/auth.ts">backend/src/middleware/auth.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/middleware/validate.ts">backend/src/middleware/validate.ts</SourceReference>
+
+## Register an account
+
+<ApiEndpoint method="POST" path="/auth/register" auth="None">
+Create a password account with the `STUDENT` role and return an application JWT.
+</ApiEndpoint>
+
+| Body field | Requirement |
+| --- | --- |
+| `email` | Required string accepted by Zod's email validator. |
+| `password` | Required string, at least eight characters. |
+| `firstName`, `lastName` | Required strings, each at least one character. |
+
+The controller checks the email as supplied, hashes the password with bcrypt, and explicitly assigns `STUDENT`. Supplying `role` does not select another role. Names/email are not trimmed or normalized by this route.
+
+```http
+POST /auth/register
+Content-Type: application/json
+
+{"email":"alex@example.com","password":"local-example-password","firstName":"Alex","lastName":"Morgan"}
+```
+
+HTTP **201**:
+
+```json
+{
+  "user": {
+    "id": "illustrative-user-id",
+    "firstName": "Alex",
+    "lastName": "Morgan",
+    "email": "alex@example.com",
+    "role": "STUDENT"
+  },
+  "token": "<application-jwt>"
+}
+```
+
+**Errors:** 400 for Zod validation or the controller's required-field check (`All fields are required`); 409 with `User already exists` for an existing email; 500 with `Registration failed` for caught runtime/database/token-signing errors. A uniqueness race can reach the 500 branch rather than the pre-check's 409.
+
+## Password login
+
+<ApiEndpoint method="POST" path="/auth/login" auth="None">
+Verify a password and return a JWT for the stored user role.
+</ApiEndpoint>
+
+Body: `email` must be an email string; `password` must be a string. Unlike registration, the login schema has no minimum password length. The controller rejects an empty password with 400 `All fields are required`.
+
+```http
+POST /auth/login
+Content-Type: application/json
+
+{"email":"alex@example.com","password":"local-example-password"}
+```
+
+HTTP **200**:
+
+```json
+{
+  "user": {
+    "userId": "illustrative-user-id",
+    "email": "alex@example.com",
+    "role": "STUDENT"
+  },
+  "token": "<application-jwt>"
+}
+```
+
+The identifier is `userId` here, whereas registration returns `id`. **Errors:** 400 validation/required fields; 401 `Invalid credentials` for an unknown email or unsuccessful password comparison; 500 `Login failed` for caught exceptions. Google-created accounts contain a password placeholder rather than a bcrypt password set through this flow.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/validators/auth.ts">backend/src/validators/auth.ts</SourceReference>
+
+## Read current identity
+
+<ApiEndpoint method="GET" path="/auth/me" auth="Required">
+Load the current user's profile and optional club from PostgreSQL.
+</ApiEndpoint>
+
+No request body, path parameters, query contract, or role restriction. HTTP **200**:
+
+```json
+{
+  "user": {
+    "id": "illustrative-user-id",
+    "firstName": "Alex",
+    "lastName": "Morgan",
+    "email": "alex@example.com",
+    "avatar": null,
+    "role": "STUDENT",
+    "club": null
+  }
+}
+```
+
+When present, `club` contains `id`, `name`, and nullable `imageUrl`. The response uses database role/profile values and sets no-cache headers, including `Vary: Authorization, Cookie`. It does not refresh the JWT. **Errors:** middleware 401; 401 `Unauthorized` when the user no longer exists or no user identifier is available; 500 `Internal server error` for caught failures.
+
+## Authenticate with a Google ID token
+
+<ApiEndpoint method="POST" path="/auth/google" auth="None">
+Exchange a Google ID token for an ElixirV4 application JWT.
+</ApiEndpoint>
+
+Body: `{ "idToken": "<google-id-token>" }`. There is no Zod schema; the controller checks that a token is present and verifies it through Google's library with `GOOGLE_CLIENT_ID` as the audience.
+
+It looks up the verified email. A new account is a `STUDENT`; an existing account without `googleId` is linked and receives an avatar if absent. Already-linked accounts are not refreshed by that branch. HTTP **200** has the same `{ user: { userId, email, role }, token }` shape as password login.
+
+**Errors:** 400 `idToken is required`; 500 `Google client not configured` with `missingVariable` and `details` when the client ID is absent; 401 `Invalid Google token` when the verified payload lacks an email; 401 `Google login failed` for caught verification, database, or signing exceptions. Database errors in this controller are therefore also reported as 401.
+
+## Start browser Google OAuth
+
+<ApiEndpoint method="GET" path="/auth/google/start" auth="None">
+Set a temporary state nonce cookie and redirect the browser to Google.
+</ApiEndpoint>
+
+Optional query `redirect` is used only when it is a string; its default is `/`. It becomes the eventual `to` value, not the configured Google callback URI. The controller chooses a frontend origin from configuration and selected `Origin`/`Referer` hostnames; see [OAuth destinations](../architecture/deployment-configuration.mdx#oauth-destinations).
+
+A successful response is HTTP **302** with a Google authorization `Location`. It sets `oauth_state_nonce` with `Path=/`, `Max-Age=600`, `SameSite=Lax`, and `Secure` only in production; it does not set `HttpOnly`. The authorization request carries base64url JSON state with nonce `n`, destination `r`, and frontend origin `o`, plus `openid email profile` scopes, offline access, consent prompting, and included granted scopes.
+
+**Errors:** 500 JSON `Google OAuth not configured`, with `missingVariables` and `details`, when the client ID, secret, or callback URI is missing; 500 JSON `Failed to start Google OAuth` for other caught failures.
+
+## Receive browser Google OAuth callback
+
+<ApiEndpoint method="GET" path="/auth/google/callback" auth="None">
+Validate the state cookie, obtain the Google profile, and redirect with an application JWT.
+</ApiEndpoint>
+
+Required query strings: `code` and `state`, with the `oauth_state_nonce` cookie from initiation. The controller decodes state, compares its nonce with the cookie, exchanges the code, fetches userinfo, and performs email-based user creation/linking. No application bearer token is required.
+
+Success is HTTP **302** to the selected frontend's `/auth/callback?token=<encoded-application-jwt>&to=<encoded-destination>`. This endpoint does not return JSON or set an application authentication cookie. It does not clear the nonce cookie. State's origin is used before the configured frontend base.
+
+| Status | Implemented plain-text error |
+| --- | --- |
+| 400 | `Missing code/state` or `Invalid state`. |
+| 401 | `No access token`, `Failed to fetch userinfo`, or `No email in profile`. |
+| 500 | `Frontend URL not configured` or caught `OAuth callback failed`, including malformed state JSON. |
+
+State/redirect limitations and JWT delivery are explained in [Authentication & Authorization](../architecture/authentication-authorization.mdx#google-browser-oauth). This reference describes the checked-in flow, not a verified deployed OAuth callback.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/routes/auth.ts">backend/src/routes/auth.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/authController.ts">backend/src/controllers/authController.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/utils/jwt.ts">backend/src/utils/jwt.ts</SourceReference>

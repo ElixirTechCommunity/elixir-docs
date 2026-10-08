@@ -1,6 +1,54 @@
 ---
 title: Clubs
-description: Club API endpoints and request contracts.
+description: Public club listing and administrative creation with existing-user leadership assignment.
 ---
 
-Verified API reference content will be added in a later phase.
+The `/clubs` router provides public listing and administrative creation. Paths follow the [reference conventions](./authentication.mdx#reference-conventions). [Clubs, Events & Registrations](../concepts/clubs-events-registrations.mdx) explains membership, leadership, and event ownership.
+
+## List clubs
+
+<ApiEndpoint method="GET" path="/clubs" auth="None">
+Return clubs with member profiles and event summaries.
+</ApiEndpoint>
+
+No validated query parameters, pagination, or explicit ordering. HTTP **200** returns `{ "clubs": [...] }`. Each club contains `id`, `name`, `description`, nullable `imageUrl`, nullable `clubHeadId`, and:
+
+- `members`: objects with `id`, `firstName`, `lastName`, `email`, and `role`.
+- `events`: objects with `id`, `title`, and `date`.
+
+The listing is public, including the selected member email addresses. It does not include mentors or a separate head-user object. Caught errors return 500 `{ "message": "Error fetching clubs" }`.
+
+## Create a club
+
+<ApiEndpoint method="POST" path="/clubs" auth="Role required">
+Create a club, then change an existing user's role and membership.
+</ApiEndpoint>
+
+**Authorization:** `ADMIN` token. There is no Zod validator. The controller checks truthiness for `name` and `description`, and looks up `clubHeadEmail` when provided. Callers should send strings; invalid types can reach Prisma and the generic 500 branch.
+
+| Body field | Effective requirement |
+| --- | --- |
+| `name` | Required; unique in the database. |
+| `description` | Required; no controller length minimum beyond truthiness. |
+| `clubHeadEmail` | Effectively required and must match an existing user's email. Omitting it also produces `Club head not found`. |
+| `imageUrl` | Optional; no route-level URL validation. |
+
+```http
+POST /clubs
+Authorization: Bearer <admin-jwt>
+Content-Type: application/json
+
+{"name":"Example Coding Club","description":"A local learning group.","clubHeadEmail":"alex@example.com"}
+```
+
+HTTP **201** returns `{ "club": ... }` with club scalars and `members` selected as `id`, `firstName`, `lastName`, and `email`. The returned club is the snapshot from the first create operation, before the subsequent user update; `members` does not automatically include the newly assigned head in that response. It has no `events` array.
+
+The user update assigns `CLUB_HEAD` and the new `clubId`, regardless of prior role/membership. It does not issue a new JWT. Club creation and assignment are not transactional, and `clubHeadId` is not a user foreign key; see [membership and leadership](../concepts/clubs-events-registrations.mdx#membership-and-leadership).
+
+**Errors:** middleware 401/403; 400 `Name and description are required`; 404 `Club head not found`; 500 `Error creating club` for caught exceptions, including duplicate names or a `clubHeadId` already stored on another club. A 500 after creation can leave a club persisted even though the user update failed.
+
+The router exposes no club update, deletion, or individual-detail endpoint. Membership administration belongs to [Users API](./users.mdx).
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/routes/clubs.ts">backend/src/routes/clubs.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/clubController.ts">backend/src/controllers/clubController.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/prisma/schema.prisma">backend/prisma/schema.prisma</SourceReference>

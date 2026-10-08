@@ -1,6 +1,127 @@
 ---
 title: Users
-description: User API endpoints and request contracts.
+description: Administrative profiles, analytics, role and club changes, and constrained deletion.
 ---
 
-Verified API reference content will be added in a later phase.
+The entire `/users` router requires a verified `ADMIN` token, including its read operations. Shared 401/403 responses and relative paths follow the [reference conventions](./authentication.mdx#reference-conventions). Membership and leadership semantics are explained in [Clubs, Events & Registrations](../concepts/clubs-events-registrations.mdx).
+
+## List users
+
+<ApiEndpoint method="GET" path="/users" auth="Role required">
+Return selected profiles with club names and registration/blog counts.
+</ApiEndpoint>
+
+No query validator or pagination is attached; the declared user-list schema is not used by this route. HTTP **200**: `{ "users": [...] }`, ordered by `createdAt` descending. Each user contains:
+
+- `id`, `email`, `firstName`, `lastName`, `role`, nullable `clubId`, and `createdAt`.
+- `club`: `{ "name": "Example Coding Club" }` or null.
+- `_count`: `{ "eventRegistrations": 0, "blogs": 0 }` with that user's actual counts.
+
+This selection excludes `password`, `googleId`, `avatar`, and `updatedAt`. **Error:** 500 `Error fetching users`.
+
+## Read platform analytics
+
+<ApiEndpoint method="GET" path="/users/analytics" auth="Role required">
+Return record totals, grouped role counts, and up to ten recent registrations.
+</ApiEndpoint>
+
+No body or validated query. HTTP **200** response shape:
+
+```json
+{
+  "analytics": {
+    "totalUsers": 2,
+    "totalClubs": 1,
+    "totalEvents": 1,
+    "totalBlogs": 0,
+    "totalMentors": 0,
+    "roleCounts": [
+      {"role": "STUDENT", "_count": {"role": 1}},
+      {"role": "ADMIN", "_count": {"role": 1}}
+    ],
+    "recentRegistrations": []
+  }
+}
+```
+
+Role groups have no explicit ordering and need not include roles with no users. Each recent registration contains `id`, `userId`, `eventId`, `registeredAt`, `event: { title }`, and `user: { firstName, lastName }`, ordered by registration time descending. Blog totals include all statuses. There is no testimonial total or total-registration field. The queries run with `Promise.all`, not a shared transactional snapshot. **Error:** 500 `Error fetching platform analytics`.
+
+## Update a user
+
+<ApiEndpoint method="PUT" path="/users/:id" auth="Role required">
+Update profile fields or club membership without changing the user's role.
+</ApiEndpoint>
+
+Path `id` must be a nonempty string. Optional body fields are `firstName`/`lastName` (nonempty strings), `email` (email string), and `clubId` (string or null). An empty object passes validation. The controller updates truthy names/email and includes `clubId` whenever it is not `undefined`. A nonempty club ID must exist; empty string passes Zod but attempts an invalid foreign-key assignment. `clubId: null` clears membership.
+
+```http
+PUT /users/illustrative-user-id
+Authorization: Bearer <admin-jwt>
+Content-Type: application/json
+
+{"firstName":"Alex","clubId":null}
+```
+
+HTTP **200**: `{ "user": ... , "message": "User updated successfully" }`. Here `user` contains **all User model scalars** (`id`, `email`, `password`, `googleId`, `avatar`, `firstName`, `lastName`, `role`, `clubId`, `createdAt`, `updatedAt`) plus `club: { name }` or null.
+
+**Errors:** 400 validation or `User ID is required`; 404 `User not found`; 500 `Error updating user`, including email uniqueness or club foreign-key failures.
+
+## Change a role
+
+<ApiEndpoint method="PUT" path="/users/:userId/role" auth="Role required">
+Change another user's persisted role without updating issued JWTs.
+</ApiEndpoint>
+
+Zod requires nonempty `userId` and body `newRole` equal to `STUDENT`, `CLUB_HEAD`, or `ADMIN`. The controller prevents changing the requesting token's own user identifier, including a same-role write. Membership and club leadership are not synchronized.
+
+HTTP **200**: `{ "user": ... , "message": "Role changed successfully" }`. The selected user contains `id`, `email`, `firstName`, `lastName`, `role`, and `club: { name }` or null; it does not include `clubId` or password. **Errors:** 400 validation, manual `Invalid role`, or `You cannot change your own role`; 500 `Error changing role`, including an unknown target user. There is no dedicated 404 branch here.
+
+Existing tokens retain their role claims; see [JWT identity](../architecture/authentication-authorization.mdx#jwt-identity).
+
+## Assign club membership
+
+<ApiEndpoint method="PUT" path="/users/:userId/club" auth="Role required">
+Replace a user's membership with the specified club.
+</ApiEndpoint>
+
+Zod requires nonempty path `userId` and body `clubId` as a nonempty string. This changes membership only: it does not assign `CLUB_HEAD`, update `Club.clubHeadId`, or issue a JWT.
+
+HTTP **200**: `{ "user": ... , "message": "User assigned to club successfully" }`, with all User scalars plus `club: { name }`, as in profile update. **Errors:** 400 validation or `Club ID is required`; 500 `Error assigning user to club`, including missing user/club records. No explicit existence pre-check produces a 404.
+
+<TechnicalDebt>
+Profile update and membership assignment return all user scalars, including the stored `password` field, while listing and role change use narrower selections. API consumers cannot assume these operations share the same profile shape or omit credential-related fields. These responses are admin-only, but should be handled as sensitive data.
+</TechnicalDebt>
+
+## Remove club membership
+
+<ApiEndpoint method="DELETE" path="/users/:userId/club" auth="Role required">
+The registered removal route currently fails parameter validation before reaching its controller.
+</ApiEndpoint>
+
+<TechnicalDebt>
+The route names its parameter `userId`, but applies `idParamSchema`, which requires `params.id`. A request that passes authentication/role checks therefore returns 400 `Validation error` with an issue at `params.id`, and the removal controller does not execute. The correctly named `userIdParamSchema` exists but is not used on this route. This mismatch is part of the effective HTTP contract.
+</TechnicalDebt>
+
+There is no working success response for this route composition. The controller in isolation would clear membership and return a full user with `User removed from club successfully`, but that is not a reachable success contract through this route. The independently verified `PUT /users/:id` operation accepts `{ "clubId": null }`.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/routes/users.ts">backend/src/routes/users.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/validators/users.ts">backend/src/validators/users.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/validators/blogs.ts">backend/src/validators/blogs.ts</SourceReference>
+
+## Delete a user
+
+<ApiEndpoint method="DELETE" path="/users/:id" auth="Role required">
+Delete a user when restrictive related records do not prevent it.
+</ApiEndpoint>
+
+Zod requires nonempty path `id`; no body is used. The controller checks existence and performs a direct Prisma delete. It has no self-deletion guard corresponding to the role-change guard.
+
+HTTP **200**: `{ "message": "User deleted successfully" }`. **Errors:** 400 validation or `User ID is required`; 404 `User not found`; 500 `Error deleting user` for caught database/runtime failures.
+
+<TechnicalDebt>
+Event registrations and authored blogs restrict user deletion; the controller does not remove them first. Such a delete can return 500 even though its comment claims cascading behavior. Mentor likes do cascade on a successful delete, and the scalar `clubHeadId` is not cleared by a foreign key. See [Data Model deletion behavior](../architecture/data-model.mdx#deletion-behavior) before relying on this operation.
+</TechnicalDebt>
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/userController.ts">backend/src/controllers/userController.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/prisma/migrations/20250829203812_initial_migration/migration.sql">backend/prisma/migrations/20250829203812_initial_migration/migration.sql</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/prisma/migrations/20250901211052_add_blogs/migration.sql">backend/prisma/migrations/20250901211052_add_blogs/migration.sql</SourceReference>

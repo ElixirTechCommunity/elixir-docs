@@ -12,6 +12,7 @@ import { getMDXComponents } from '@/components/mdx';
 import type { Metadata } from 'next';
 import { createRelativeLink } from 'fumadocs-ui/mdx';
 import { getPageImageUrl, getPageMarkdownUrl } from '@/lib/shared';
+import { DocumentationPaths } from '@/components/documentation-paths';
 
 export default async function Page(props: PageProps<'/docs/[[...slug]]'>) {
   const params = await props.params;
@@ -23,12 +24,16 @@ export default async function Page(props: PageProps<'/docs/[[...slug]]'>) {
 
   return (
     <DocsPage toc={page.data.toc} full={page.data.full}>
-      <DocsTitle>{page.data.title}</DocsTitle>
-      <DocsDescription className="mb-0">{page.data.description}</DocsDescription>
-      <div className="flex flex-row gap-2 items-center border-b pb-6">
-        <MarkdownCopyButton markdownUrl={markdownUrl} />
-        <ViewOptionsPopover markdownUrl={markdownUrl} />
-      </div>
+      <header className="docs-heading">
+        {page.slugs.length === 0 ? <p className="docs-eyebrow">Elixir Community · Backend documentation</p> : null}
+        <DocsTitle>{page.data.title}</DocsTitle>
+        <DocsDescription className="docs-description">{page.data.description}</DocsDescription>
+        <div className="docs-page-actions">
+          <MarkdownCopyButton markdownUrl={markdownUrl} />
+          <ViewOptionsPopover markdownUrl={markdownUrl} />
+        </div>
+      </header>
+      {page.slugs.length === 0 ? <DocumentationPaths /> : null}
       <DocsBody>
         <MDX
           components={getMDXComponents({

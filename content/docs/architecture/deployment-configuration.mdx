@@ -37,7 +37,7 @@ These names come from current runtime reads, the Prisma datasource, and frontend
 | `FRONTEND_URL` | Further alias for the OAuth frontend destination. | Third choice, then `http://localhost:3000` outside production or empty string in production. |
 | `ALLOWED_ORIGINS` | Optional additional CORS browser origins. | Comma-split, trimmed, empty entries removed; added to the fixed allowlist on each request. |
 | `NODE_ENV` | Selects logging format, OAuth cookie `Secure`, frontend destination default, and shared Prisma caching behavior. | Only the exact value `production` selects production branches. Nodemon supplies `development`; the backend code provides no general default. |
-| `PORT` | Local/server listening target. | Passed to `app.listen` as `process.env.PORT || 3001`; no explicit parsing or validation. No listener in the wrappers. |
+| `PORT` | Local/server listening target. | Passed to `app.listen` as `process.env.PORT \|\| 3001`; no explicit parsing or validation. No listener in the wrappers. |
 
 `dotenv.config()` runs in `src/utils/jwt.ts`. The Express import chain loads this utility before the authentication controller captures its configuration. By default it reads `.env` from the process working directory, which is why local commands run from `backend/`. Hosted environments can supply variables directly.
 

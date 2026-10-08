@@ -1,6 +1,66 @@
 ---
 title: Clubs, Events & Registrations
-description: The domain concepts behind clubs, events, and registrations.
+description: Club membership and leadership, event ownership, and authenticated registrations.
 ---
 
-This page will explain the implemented lifecycle and relationships for these domain concepts.
+Clubs group users, events, and mentors. A user's role controls which routes they may enter; their current club membership controls which club's events they can manage. These are separate pieces of state, so a `CLUB_HEAD` role alone does not establish ownership of a particular event.
+
+## Creating a club
+
+An administrator creates a club by supplying an existing user's email as `clubHeadEmail`. The controller requires a matching account; it does not create an account or restrict the selected user's previous role to `STUDENT`.
+
+The controller first creates a club with the user's identifier in `Club.clubHeadId`. It then changes that user's role to `CLUB_HEAD` and sets `User.clubId` to the new club. This can replace the user's previous role or membership. Club creation and the user update are separate database writes.
+
+Club names and non-null `clubHeadId` values are unique. Selecting an account already stored as another club's head can therefore fail at club creation, even though the user lookup accepts that account's role.
+
+The public club listing includes members' names, email addresses, and roles, as well as event summaries. It is not limited to club heads or signed-in users. See [Clubs API](../api-reference/clubs.mdx) for exact response fields.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/clubController.ts">backend/src/controllers/clubController.ts</SourceReference>
+
+## Membership and leadership
+
+| State | Implemented meaning |
+| --- | --- |
+| `User.role` | Route-level role: `STUDENT`, `CLUB_HEAD`, or `ADMIN`. |
+| `User.clubId` | Optional, database-enforced membership in one existing club. |
+| `Club.clubHeadId` | Optional unique leadership identifier, stored as a scalar without a foreign key. |
+
+Administrative user operations can change role and membership independently. Event controllers use the current user's `clubId`, not the club's `clubHeadId`, when checking club-head ownership. A user can therefore have a head role without membership, or membership in a club whose stored head identifier points elsewhere.
+
+<TechnicalDebt>
+The database does not enforce one invariant across role, membership, and leadership. Club creation uses separate writes, and later administration can change one field without synchronizing the others. Contributors changing event access must trace the role middleware and membership lookup rather than infer permission from `clubHeadId`. [Data Model](../architecture/data-model.mdx#club-leadership-and-membership) explains the constraints.
+</TechnicalDebt>
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/prisma/schema.prisma">backend/prisma/schema.prisma</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/userController.ts">backend/src/controllers/userController.ts</SourceReference>
+
+## Events belong to clubs
+
+Every event requires a club. Public listing returns events without a publication flag, authentication requirement, or upcoming-only filter. It orders by event date and reports registration counts; past events are not excluded by the controller.
+
+Only a `CLUB_HEAD` token may enter event creation. The controller reads the user's current club and assigns the event to that club; callers cannot choose another club through creation. `ADMIN` is not an implicit superset of `CLUB_HEAD` on this route.
+
+Both `ADMIN` and `CLUB_HEAD` may enter event update, deletion, and registration-list routes. Club heads must belong to the event's current club. Admins bypass that comparison. The club-management listing is also available to both roles, but returns only the requesting user's associated club's events; it is not an all-club admin listing.
+
+An update may supply another `clubId`. Ownership is checked against the existing event before that change, and the controller does not restrict the replacement club to the requester's club. The database requires the replacement club to exist. Contributors must account for this behavior when changing event ownership.
+
+Requests call the event-date field `data`; controllers convert it to persisted/returned `date`. The [Events API](../api-reference/events.mdx) documents this mapping and the effective image requirement. Event deletion removes registrations before deleting the event, using separate statements; the database itself restricts deleting an event that still has registrations.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/routes/events.ts">backend/src/routes/events.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/eventController.ts">backend/src/controllers/eventController.ts</SourceReference>
+
+## Registrations connect a user and event
+
+Any authenticated user may register, with no route-level role restriction. The controller takes the user identifier from the verified token and the event identifier from the URL. A registration belongs to exactly one user and one event; `(userId, eventId)` is unique in the database.
+
+A prior-registration lookup returns a duplicate-registration error when the pair already exists. The uniqueness constraint remains authoritative for concurrent attempts. There is no event-existence pre-check in this controller, so an unknown event reaches a caught database error rather than a dedicated not-found response.
+
+Users can list their own registered events. Admins and owning club heads can inspect an event's registrations, including attendee names and email addresses. There is no unregister route, capacity check, or date-based registration cutoff in the checked-in event router/controller.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/prisma/migrations/20250829203812_initial_migration/migration.sql">backend/prisma/migrations/20250829203812_initial_migration/migration.sql</SourceReference>
+
+## Changing access in this domain
+
+Role checks occur in routes; event ownership checks occur in controllers using database membership. A role claim in a JWT can differ from the current database role, while membership is loaded afresh for the event checks. Read [Authentication & Authorization](../architecture/authentication-authorization.mdx#roles-and-ownership) before changing either boundary.
+
+Use the [Clubs API](../api-reference/clubs.mdx), [Events API](../api-reference/events.mdx), and [Users API](../api-reference/users.mdx) for the individual operations that change or expose this state.

@@ -1,6 +1,144 @@
 ---
 title: Blogs
-description: Blog API endpoints and request contracts.
+description: Public blog reads, contributor submissions, and administrative moderation contracts.
 ---
 
-Verified API reference content will be added in a later phase.
+Paths follow the [reference conventions](./authentication.mdx#reference-conventions). [Blog Submission & Moderation](../concepts/blog-submission-moderation.mdx) explains stored statuses, visibility, and available transitions.
+
+A **blog record** below contains `id`, `title`, `content`, nullable `imageUrl`, `status`, `authorId`, `createdAt`, and `updatedAt`. `content` is a stored string, not a structured rich-text object. The backend validates its length where specified below, without imposing a Markdown/HTML format or sanitizing it in these controllers.
+
+## Public reads
+
+### List published blogs
+
+<ApiEndpoint method="GET" path="/blogs" auth="None">
+Return published blogs, newest creation first.
+</ApiEndpoint>
+
+No pagination or validated query parameters. HTTP **200** returns `{ "blogs": [...] }`, with blog records plus `author: { firstName, lastName, avatar }`; `avatar` is nullable. Full `content` is included. The controller sets `Cache-Control: public, s-maxage=120, stale-while-revalidate=300`. **Error:** 500 `Failed to fetch blogs`.
+
+### Read a blog
+
+<ApiEndpoint method="GET" path="/blogs/:id" auth="Conditional">
+Read published detail publicly, or unpublished detail as its author or an admin.
+</ApiEndpoint>
+
+Path `id` identifies the blog; no Zod validator or shared authentication middleware is attached. For `DRAFT`/`ARCHIVED`, the controller itself requires a header beginning exactly `Bearer `, verifies the token, and allows an `ADMIN` claim or a matching `userId`/`authorId`. Published records return even without a token.
+
+HTTP **200**:
+
+```json
+{
+  "blog": {
+    "id": "illustrative-blog-id",
+    "title": "Example workshop notes",
+    "content": "Notes from our introductory programming workshop.",
+    "imageUrl": null,
+    "status": "PUBLISHED",
+    "authorId": "illustrative-user-id",
+    "createdAt": "2026-10-01T10:00:00.000Z",
+    "updatedAt": "2026-10-02T10:00:00.000Z",
+    "author": {"firstName": "Alex", "lastName": "Morgan", "avatar": null}
+  }
+}
+```
+
+**Errors:** 404 `Blog not found`; 403 `You are not allowed to view this blog` for unpublished content when credentials are missing, invalid, or insufficient; 500 `Failed to fetch blog`. This route does not use the shared middleware's 401 error behavior.
+
+## Authenticated contributors
+
+### Submit a draft
+
+<ApiEndpoint method="POST" path="/blogs/submit" auth="Role required">
+Create a draft under the authenticated user's identifier.
+</ApiEndpoint>
+
+**Authorization:** any of `STUDENT`, `CLUB_HEAD`, or `ADMIN`.
+
+| Body field | Validation |
+| --- | --- |
+| `title` | Required string, minimum three characters. |
+| `content` | Required string, minimum twenty characters. |
+| `imageUrl` | Optional URL string; omitted becomes `null`. |
+
+```http
+POST /blogs/submit
+Authorization: Bearer <application-jwt>
+Content-Type: application/json
+
+{"title":"Example workshop notes","content":"Notes from our introductory programming workshop."}
+```
+
+HTTP **201** returns `{ "blog": ... }` with a `DRAFT` blog record and `author: { firstName, lastName }`. It does not include the author's avatar in this response. `status` and `authorId` supplied by callers are not used; the controller chooses both.
+
+**Errors:** middleware 401/403; controller 401 `Unauthorized` if no user identifier is available; 400 validation or `Title and content are required`; 500 `Failed to submit blog`.
+
+### List personal blogs
+
+<ApiEndpoint method="GET" path="/blogs/me" auth="Role required">
+Return all statuses for the authenticated author's blogs.
+</ApiEndpoint>
+
+**Authorization:** `STUDENT`, `CLUB_HEAD`, or `ADMIN`. No body/query schema or pagination. HTTP **200**: `{ "blogs": [...] }`, containing blog scalars without nested `author`, ordered by `createdAt` descending. **Errors:** middleware 401/403; controller 401 `Unauthorized`; 500 `Failed to fetch your blogs`.
+
+There are no contributor update or delete endpoints; those operations below require `ADMIN` even for the author.
+
+## Administrators
+
+All routes in this section require an `ADMIN` JWT and may return the [shared 401/403 errors](./authentication.mdx#reference-conventions). Validation failures on mutations return the shared Zod 400 response.
+
+### List all blogs
+
+<ApiEndpoint method="GET" path="/blogs/admin" auth="Role required">
+Return every blog and status for administrative review.
+</ApiEndpoint>
+
+No query schema or pagination. HTTP **200**: `{ "blogs": [...] }`, with blog records plus `author: { firstName, lastName }`, ordered by `createdAt` descending. **Error:** 500 `Failed to fetch blogs`.
+
+### Create a blog directly
+
+<ApiEndpoint method="POST" path="/blogs" auth="Role required">
+Create a blog under the admin's identity with an optional initial status.
+</ApiEndpoint>
+
+Body requires `title` (string, minimum three characters) and `content` (string, minimum twenty). `imageUrl` is an optional URL string, defaulting to null in the controller. `status` is optional `DRAFT`, `PUBLISHED`, or `ARCHIVED`; the controller defaults to `DRAFT`. `authorId` is taken from the token, not the body.
+
+HTTP **201** returns `{ "blog": ... }` with a blog record and `author: { firstName, lastName, avatar }`. **Errors:** 400 validation or `Title and content are required`; 500 `Failed to create blog`.
+
+### Update a blog
+
+<ApiEndpoint method="PUT" path="/blogs/:id" auth="Role required">
+Update content or status on any blog without an ownership requirement.
+</ApiEndpoint>
+
+Path `id` must be a nonempty string. Optional body fields: `title` (minimum three characters), `content` (minimum twenty), `imageUrl` (URL string), and `status` (one of the three enum values). No minimum number of changed fields is enforced. `null` cannot clear `imageUrl` through this schema. The controller passes these fields to Prisma; omitted fields remain unchanged and author identity is not updated.
+
+HTTP **200**: `{ "blog": ... }` with a blog record and `author: { firstName, lastName, avatar }`. **Errors:** 400 validation; 500 `Failed to update blog`, including unknown IDs. There is no explicit not-found pre-check or prior-status guard.
+
+### Approve / publish
+
+<ApiEndpoint method="POST" path="/blogs/:id/approve" auth="Role required">
+Set an existing blog's status to `PUBLISHED`.
+</ApiEndpoint>
+
+Zod requires nonempty path `id`; no body fields are used. Any prior status is accepted, including an already published or archived record. HTTP **200**: `{ "blog": ... }` with blog scalars only. **Errors:** 400 validation; 500 `Failed to approve blog`, including unknown IDs.
+
+### Archive
+
+<ApiEndpoint method="POST" path="/blogs/:id/archive" auth="Role required">
+Set an existing blog's status to `ARCHIVED` without deleting it.
+</ApiEndpoint>
+
+Zod requires nonempty path `id`; no body fields are used. Any prior status is accepted. HTTP **200**: `{ "blog": ... }` with blog scalars only. **Errors:** 400 validation; 500 `Failed to archive blog`, including unknown IDs. Author/admin detail access remains available after archival.
+
+### Delete a blog
+
+<ApiEndpoint method="DELETE" path="/blogs/:id" auth="Role required">
+Delete the record rather than assign an archived status.
+</ApiEndpoint>
+
+Zod requires nonempty path `id`; no body fields are used. HTTP **200**: `{ "message": "Blog deleted successfully" }`. **Errors:** 400 validation; 500 `Failed to delete blog`, including unknown IDs. This is not restricted to a particular status or the requesting admin's own blogs.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/routes/blogs.ts">backend/src/routes/blogs.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/validators/blogs.ts">backend/src/validators/blogs.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/blogController.ts">backend/src/controllers/blogController.ts</SourceReference>

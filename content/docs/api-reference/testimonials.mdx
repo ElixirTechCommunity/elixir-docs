@@ -1,6 +1,74 @@
 ---
 title: Testimonials
-description: Testimonial API endpoints and request contracts.
+description: Public testimonial pagination and administrative create, update, and delete contracts.
 ---
 
-Verified API reference content will be added in a later phase.
+Paths and shared authentication/validation errors follow the [reference conventions](./authentication.mdx#reference-conventions). A testimonial record contains `id`, `name`, nullable `imageUrl`, integer `batchYear`, `content`, and `createdAt`. It has no user or club relationship.
+
+## List testimonials
+
+<ApiEndpoint method="GET" path="/testimonials" auth="None">
+Return a page of testimonials ordered by creation time descending.
+</ApiEndpoint>
+
+Zod accepts optional query strings `page` and `limit`. Empty/absent values use `1` and `12` before base-10 integer parsing. The controller clamps page to at least 1 and limit to 1–100; zero becomes 1. Partially numeric strings use their integer prefix. Non-numeric strings produce `NaN`, which is not repaired by the clamps and can cause the caught database failure.
+
+HTTP **200**:
+
+```json
+{
+  "items": [{
+    "id": "illustrative-testimonial-id",
+    "name": "Alex Morgan",
+    "imageUrl": null,
+    "batchYear": 2026,
+    "content": "The community helped me learn with others.",
+    "createdAt": "2026-10-07T10:00:00.000Z"
+  }],
+  "page": 1,
+  "limit": 12,
+  "total": 1
+}
+```
+
+The envelope uses `items`, not `testimonials`, and has no page-count field. **Errors:** 400 query validation; 500 `Failed to fetch testimonials`.
+
+## Create a testimonial
+
+<ApiEndpoint method="POST" path="/testimonials" auth="Role required">
+Create a testimonial as an administrator.
+</ApiEndpoint>
+
+**Authorization:** `ADMIN`. Zod requires nonempty strings `name` and `content`, and `batchYear` as a JSON integer from 1900 through 3000 inclusive; a numeric string is not coerced. `imageUrl` is optional and may be a URL string or `""`. Omission persists null; empty string is stored as empty string.
+
+```http
+POST /testimonials
+Authorization: Bearer <admin-jwt>
+Content-Type: application/json
+
+{"name":"Alex Morgan","batchYear":2026,"content":"The community helped me learn with others."}
+```
+
+HTTP **201**: `{ "testimonial": ... }`, with all testimonial scalars. **Errors:** middleware 401/403; 400 validation; 500 `Failed to create testimonial`.
+
+## Update a testimonial
+
+<ApiEndpoint method="PUT" path="/testimonials/:id" auth="Role required">
+Update any supplied testimonial fields as an administrator.
+</ApiEndpoint>
+
+**Authorization:** `ADMIN`. Path `id` must be nonempty. The same body fields and constraints as creation apply, but all are optional. An empty object passes validation; omitted fields remain unchanged. `imageUrl: ""` is accepted, while `null` is not accepted by the schema.
+
+HTTP **200**: `{ "testimonial": ... }`. **Errors:** middleware 401/403; 400 validation; 500 `Failed to update testimonial`, including unknown IDs. The controller has no explicit not-found branch.
+
+## Delete a testimonial
+
+<ApiEndpoint method="DELETE" path="/testimonials/:id" auth="Role required">
+Delete a testimonial as an administrator.
+</ApiEndpoint>
+
+**Authorization:** `ADMIN`. Zod requires nonempty path `id`; no body is used. Success is HTTP **204 with no response body**. **Errors:** middleware 401/403; 400 validation; 500 `Failed to delete testimonial`, including unknown IDs.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/routes/testimonials.ts">backend/src/routes/testimonials.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/validators/testimonials.ts">backend/src/validators/testimonials.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/testimonialController.ts">backend/src/controllers/testimonialController.ts</SourceReference>

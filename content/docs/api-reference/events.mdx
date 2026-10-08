@@ -1,6 +1,170 @@
 ---
 title: Events
-description: Event API endpoints and request contracts.
+description: Event listing and management, club ownership, and registration contracts.
 ---
 
-Verified API reference content will be added in a later phase.
+Paths follow the [reference conventions](./authentication.mdx#reference-conventions). Read [Clubs, Events & Registrations](../concepts/clubs-events-registrations.mdx) for domain behavior. The router has eight operations; it does not expose a public `GET /events/:id` or an unregister operation.
+
+An **event record** below means the returned model scalars: `id`, `title`, `description`, nullable `imageUrl`, `date`, `clubId`, and `createdAt`. When selected, `club` contains `name` and nullable `imageUrl`. Request fields call the date **`data`**, while response/database fields call it **`date`**.
+
+## List public events
+
+<ApiEndpoint method="GET" path="/events" auth="None">
+List events with registration counts and pagination metadata.
+</ApiEndpoint>
+
+| Query | Parsing and default |
+| --- | --- |
+| `page` | Optional string; `parseInt(value) \|\| 1`. |
+| `limit` | Optional string; `parseInt(value) \|\| 12`. |
+| `sort` | Optional `asc` or `desc`; default `desc`, ordering by `date`. |
+
+Zod checks string types and the sort enum, not positive numeric bounds. Zero/unparseable page or limit values fall back; partially numeric strings use their integer prefix. Negative values are not rejected by the schema. Skip is `(page - 1) * limit`; unsupported database arguments reach the 500 branch. No upcoming-only or club filter is implemented.
+
+HTTP **200** example:
+
+```json
+{
+  "events": [{
+    "id": "illustrative-event-id",
+    "title": "Example workshop",
+    "description": "An introductory programming workshop.",
+    "imageUrl": "https://example.com/workshop.png",
+    "date": "2026-11-12T10:00:00.000Z",
+    "clubId": "illustrative-club-id",
+    "createdAt": "2026-10-01T10:00:00.000Z",
+    "club": {"name": "Example Coding Club", "imageUrl": null},
+    "registrationCount": 0
+  }],
+  "pagination": {"page": 1, "pages": 1, "total": 1, "limit": 12}
+}
+```
+
+`_count` is transformed into `registrationCount` rather than returned. The controller sets `Cache-Control: public, s-maxage=60, stale-while-revalidate=120`. **Errors:** 400 Zod validation; 500 `Error fetching events`.
+
+## List the requesting user's club events
+
+<ApiEndpoint method="GET" path="/events/mine" auth="Role required">
+Return events for the authenticated user's currently associated club.
+</ApiEndpoint>
+
+**Authorization:** `CLUB_HEAD` or `ADMIN`. No body/query schema. The controller loads the user's current club; admins receive their associated club's events, not all events.
+
+HTTP **200**: `{ "events": [...] }`, ordered by date descending. Each item is an event record with `club` and `registrations: [{ "id": "illustrative-registration-id" }]`. It returns registration IDs, not `registrationCount` or attendee profiles.
+
+**Errors:** middleware 401/403; 400 `You are not associated with any club`; 500 `Error fetching club events`.
+
+## Create an event
+
+<ApiEndpoint method="POST" path="/events" auth="Role required">
+Create an event for the requesting club head's current club.
+</ApiEndpoint>
+
+**Authorization:** `CLUB_HEAD` only; an `ADMIN` token is rejected by this role list. The controller also requires current club membership. It ignores a supplied `clubId` when creating the record.
+
+| Body field | Effective contract |
+| --- | --- |
+| `title` | Required string, minimum three characters. |
+| `description` | Required string, minimum ten characters. |
+| `data` | Required nonempty string. Zod accepts an ISO datetime or any nonempty string; the controller uses `new Date(data)`. Send a parseable datetime. |
+| `imageUrl` | Effectively required URL string; see the mismatch below. |
+
+```http
+POST /events
+Authorization: Bearer <club-head-jwt>
+Content-Type: application/json
+
+{"title":"Example workshop","description":"An introductory programming workshop.","data":"2026-11-12T10:00:00.000Z","imageUrl":"https://example.com/workshop.png"}
+```
+
+HTTP **201**: `{ "event": ... }` with an event record and selected `club`. No registration count/array is included. **Errors:** middleware 401/403; 400 validation or `All fields are required`; 400 `You must be a club head to create an event` when the user has no club; 500 `Error creating event`, including a date string accepted by validation but unusable by Prisma.
+
+<TechnicalDebt>
+The creation schema makes `imageUrl` optional, but the controller requires it. Omitting it passes that schema and then returns 400 `All fields are required`. Include a valid URL to satisfy both layers; validation alone does not describe the effective caller contract.
+</TechnicalDebt>
+
+## Update an event
+
+<ApiEndpoint method="PUT" path="/events/:id" auth="Role required">
+Change selected event fields after checking access to the existing event.
+</ApiEndpoint>
+
+**Authorization:** `ADMIN` or `CLUB_HEAD`; a club head's current club must match the event's current `clubId`. Path `id` is a nonempty string.
+
+All body fields are optional: `title` (minimum three characters), `description` (minimum ten), `data` (nonempty string converted to a date), `imageUrl` (URL string), and `clubId` (string). Only truthy values are included in the update. Empty `clubId` is accepted by the schema and ignored; nullable fields cannot be cleared with `null` through this schema.
+
+The existing-event ownership check does not constrain the replacement `clubId` to the requester's club. The target must exist because of the foreign key. An empty object is permitted by validation.
+
+HTTP **200**: `{ "event": ... , "message": "Event updated successfully" }`, with an event record and `club`. **Errors:** middleware 401/403; 400 validation or `Event ID is required`; 404 `Event not found`; 403 `Not allowed to modify this event`; 500 `Error updating event` for caught failures.
+
+## Delete an event
+
+<ApiEndpoint method="DELETE" path="/events/:id" auth="Role required">
+Remove registrations, then delete an accessible event.
+</ApiEndpoint>
+
+**Authorization:** `ADMIN` or owning `CLUB_HEAD`. Zod requires a nonempty `id`; no body is used. The controller deletes registrations first because the event foreign key restricts deletion. These two writes are not transactional.
+
+HTTP **200**: `{ "message": "Event deleted successfully" }`. **Errors:** middleware 401/403; 400 validation or `Event ID is required`; 404 `Event not found`; 403 `Not allowed to delete this event`; 500 `Error deleting event`. A failure after registration removal can leave the event without those registrations.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/validators/events.ts">backend/src/validators/events.ts</SourceReference>
+
+## Register for an event
+
+<ApiEndpoint method="POST" path="/events/:eventId/register" auth="Required">
+Create the current user's registration for the URL's event.
+</ApiEndpoint>
+
+No role restriction, body fields, or route-specific Zod validator. `eventId` identifies the event; the user comes from the token. The controller checks the compound `(userId, eventId)` key for a prior registration.
+
+HTTP **201**:
+
+```json
+{
+  "registration": {
+    "id": "illustrative-registration-id",
+    "userId": "illustrative-user-id",
+    "eventId": "illustrative-event-id",
+    "registeredAt": "2026-10-07T10:00:00.000Z",
+    "event": {"title": "Example workshop"},
+    "user": {"firstName": "Alex", "lastName": "Morgan"}
+  }
+}
+```
+
+**Errors:** middleware 401; 400 `You have already registered for this event`; 500 `Error registering for event`. Unknown events/users and uniqueness races reach caught database failures, not a dedicated 404/409 branch. Database uniqueness prevents two registrations for the same pair.
+
+## List the current user's registrations
+
+<ApiEndpoint method="GET" path="/events/registered" auth="Required">
+Return registrations belonging to the token's user identifier.
+</ApiEndpoint>
+
+No role restriction or validated query/body. HTTP **200**: `{ "registrations": [...] }`. Each item contains `id`, `userId`, `eventId`, `registeredAt`, and an `event` record with selected `club`. Records are ordered by the related event's date descending, not registration time. **Errors:** middleware 401; 500 `Error fetching registered events`.
+
+## List attendees for an event
+
+<ApiEndpoint method="GET" path="/events/:id/registrations" auth="Role required">
+Return a summary of the event and its registrations with attendee contact details.
+</ApiEndpoint>
+
+**Authorization:** `ADMIN` or owning `CLUB_HEAD`. Path `id` identifies the event; no Zod validator is attached. HTTP **200**:
+
+```json
+{
+  "event": {"id": "illustrative-event-id", "title": "Example workshop", "date": "2026-11-12T10:00:00.000Z"},
+  "registrations": [{
+    "id": "illustrative-registration-id",
+    "userId": "illustrative-user-id",
+    "name": "Alex Morgan",
+    "email": "alex@example.com",
+    "registeredAt": "2026-10-07T10:00:00.000Z"
+  }]
+}
+```
+
+The controller combines and trims first/last names and orders by `registeredAt` descending. **Errors:** middleware 401/403; 400 `Event ID is required`; 404 `Event not found`; 403 `Not allowed to view registrations for this event`; 500 `Error fetching event registrations`.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/routes/events.ts">backend/src/routes/events.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/eventController.ts">backend/src/controllers/eventController.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/prisma/schema.prisma">backend/prisma/schema.prisma</SourceReference>

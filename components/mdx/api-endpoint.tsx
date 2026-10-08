@@ -3,19 +3,20 @@ import type { ReactNode } from 'react';
 type ApiEndpointProps = {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   path: string;
-  auth?: 'None' | 'Required' | 'Role required';
+  auth?: 'None' | 'Required' | 'Role required' | 'Conditional';
   children?: ReactNode;
 };
 
 export function ApiEndpoint({ method, path, auth, children }: ApiEndpointProps) {
+  const access = auth === 'None' ? 'Public' : auth === 'Role required' ? 'Authenticated · Role restricted' : auth === 'Conditional' ? 'Conditional authentication' : 'Authenticated';
   return (
-    <section aria-label={`${method} ${path}`} className="not-prose my-6 overflow-hidden rounded-md border border-fd-border bg-fd-card">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-fd-border px-4 py-3 font-mono text-sm">
-        <strong className="text-fd-primary">{method}</strong>
-        <code className="break-all text-fd-foreground">{path}</code>
-        {auth ? <span className="ml-auto font-sans text-xs text-fd-muted-foreground">Authentication: {auth}</span> : null}
+    <section aria-label={`${method} ${path}`} className="api-endpoint not-prose" data-method={method}>
+      <div className="api-endpoint-heading">
+        <strong className="api-method">{method}</strong>
+        <code className="api-path">{path}</code>
+        {auth ? <span className="api-access">{access}</span> : null}
       </div>
-      {children ? <div className="px-4 py-3 text-sm text-fd-muted-foreground">{children}</div> : null}
+      {children ? <div className="api-purpose">{children}</div> : null}
     </section>
   );
 }

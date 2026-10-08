@@ -1,6 +1,41 @@
 ---
 title: Health
-description: Health API endpoint and operational response behavior.
+description: Application availability and diagnostic responses, without a database health query.
 ---
 
-Verified API reference content will be added in a later phase.
+These public diagnostics are direct Express routes. Paths follow the [reference conventions](./authentication.mdx#reference-conventions); they have no `/api` prefix in the shared application. Neither route accepts or validates request parameters, queries PostgreSQL, or reports database/migration state.
+
+## Application health
+
+<ApiEndpoint method="GET" path="/health" auth="None">
+Confirm that a request reaches the Express application and receives its health response.
+</ApiEndpoint>
+
+```sh
+curl -i http://localhost:3001/health
+```
+
+HTTP **200**:
+
+```json
+{"status":"OK","message":"Server is working!"}
+```
+
+The local `server.ts` connects the shared Prisma client before listening, so a local response also means the initial connection completed. The route does not check ongoing database connectivity or applied migrations. The serverless wrappers do not run that startup gate. See [Backend Quickstart](../getting-started/backend-quickstart.mdx#start-and-verify-the-backend) and [Deployment & Configuration](../architecture/deployment-configuration.mdx#runtime-modes).
+
+## Diagnostic response
+
+<ApiEndpoint method="GET" path="/test" auth="None">
+Confirm that the Express diagnostic route is reachable.
+</ApiEndpoint>
+
+HTTP **200**:
+
+```json
+{"message":"API is working!"}
+```
+
+This response has no additional dependency checks. Both diagnostics still pass through the global middleware; rate limiting can return 429 before either route responds. There is no route-specific error branch or database-failure response on these checks.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/app.ts">backend/src/app.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/server.ts">backend/src/server.ts</SourceReference>
