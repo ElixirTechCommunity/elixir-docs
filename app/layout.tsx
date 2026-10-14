@@ -1,4 +1,4 @@
-import { RootProvider } from 'fumadocs-ui/provider/next';
+import { DocsProvider } from '@/components/docs-provider';
 import './global.css';
 import { Geist, Geist_Mono } from 'next/font/google';
 import type { Metadata } from 'next';
@@ -27,7 +27,7 @@ export default function Layout({ children }: LayoutProps<'/'>) {
   return (
     <html lang="en" className={`${geist.variable} ${geistMono.variable}`} suppressHydrationWarning>
       <body className="flex flex-col min-h-screen font-sans">
-        <RootProvider>{children}</RootProvider>
+        <DocsProvider>{children}</DocsProvider>
       </body>
     </html>
   );
