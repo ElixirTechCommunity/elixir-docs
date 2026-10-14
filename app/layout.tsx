@@ -2,6 +2,7 @@ import { DocsProvider } from '@/components/docs-provider';
 import './global.css';
 import { Geist, Geist_Mono } from 'next/font/google';
 import type { Metadata } from 'next';
+import { Analytics } from '@vercel/analytics/next';
 
 const geist = Geist({ subsets: ['latin'], variable: '--font-geist', display: 'swap', fallback: ['system-ui', 'Arial'] });
 const geistMono = Geist_Mono({ subsets: ['latin'], variable: '--font-geist-mono', display: 'swap', fallback: ['ui-monospace', 'Menlo', 'monospace'] });
@@ -28,6 +29,7 @@ export default function Layout({ children }: LayoutProps<'/'>) {
     <html lang="en" className={`${geist.variable} ${geistMono.variable}`} suppressHydrationWarning>
       <body className="flex flex-col min-h-screen font-sans">
         <DocsProvider>{children}</DocsProvider>
+        <Analytics />
       </body>
     </html>
   );
