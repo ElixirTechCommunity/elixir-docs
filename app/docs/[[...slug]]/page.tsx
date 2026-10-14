@@ -13,6 +13,7 @@ import type { Metadata } from 'next';
 import { createRelativeLink } from 'fumadocs-ui/mdx';
 import { getPageImageUrl, getPageMarkdownUrl } from '@/lib/shared';
 import { DocumentationPaths } from '@/components/documentation-paths';
+import { findNeighbour } from 'fumadocs-core/page-tree';
 
 export default async function Page(props: PageProps<'/docs/[[...slug]]'>) {
   const params = await props.params;
@@ -21,17 +22,29 @@ export default async function Page(props: PageProps<'/docs/[[...slug]]'>) {
 
   const MDX = page.data.body;
   const markdownUrl = getPageMarkdownUrl(page).url;
+  const filePath = `content/docs/${page.path}`;
+  const editUrl = `https://github.com/ElixirTechCommunity/elixir-docs/edit/main/${filePath}`;
+  const sourceUrl = `https://github.com/ElixirTechCommunity/elixir-docs/blob/main/${filePath}`;
+  const updated = page.data.lastModified;
+  const { previous, next } = findNeighbour(source.getPageTree(), page.url);
 
   return (
-    <DocsPage toc={page.data.toc} full={page.data.full}>
+    <DocsPage toc={page.data.toc} full={page.data.full}
+      breadcrumb={{ includeRoot: true, includePage: true, className: 'docs-breadcrumb' }}
+      tableOfContent={{ style: 'normal', list: { thumbBox: false } }}
+      tableOfContentPopover={{ enabled: false }}
+      footer={{ className: 'docs-pagination', items: {
+        previous: previous ? { ...previous, description: 'Previous' } : undefined,
+        next: next ? { ...next, description: 'Next' } : undefined,
+      } }}>
       <header className="docs-heading">
-        {page.slugs.length === 0 ? <p className="docs-eyebrow">Elixir Community · Backend documentation</p> : null}
         <DocsTitle>{page.data.title}</DocsTitle>
         <DocsDescription className="docs-description">{page.data.description}</DocsDescription>
         <div className="docs-page-actions">
           <MarkdownCopyButton markdownUrl={markdownUrl} />
           <ViewOptionsPopover markdownUrl={markdownUrl} />
         </div>
+        <p className="docs-page-status">Status: {page.data.status} · Source: <a href={sourceUrl}><code>{filePath}</code></a></p>
       </header>
       {page.slugs.length === 0 ? <DocumentationPaths /> : null}
       <DocsBody>
@@ -42,6 +55,10 @@ export default async function Page(props: PageProps<'/docs/[[...slug]]'>) {
           })}
         />
       </DocsBody>
+      <p className="docs-page-meta">
+        Last updated {updated ? <time dateTime={updated.toISOString()}>{new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeZone: 'UTC' }).format(updated)}</time> : 'unavailable'}
+        {' · '}<a href={editUrl}>Edit this page on GitHub</a>
+      </p>
     </DocsPage>
   );
 }

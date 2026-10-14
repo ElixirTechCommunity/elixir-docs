@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import { LinkRows } from './link-rows';
 
 const paths = [
   { href: '/docs/getting-started/backend-quickstart', label: 'Run the backend', title: 'Quickstart', description: 'Set up Node.js, PostgreSQL, and Prisma locally.' },
@@ -8,14 +8,6 @@ const paths = [
 
 export function DocumentationPaths() {
   return (
-    <nav className="documentation-paths" aria-label="Start exploring the documentation">
-      {paths.map(({ href, label, title, description }) => (
-        <Link key={href} href={href} className="documentation-path">
-          <span className="documentation-path-label">{label}</span>
-          <span className="documentation-path-title">{title}<span aria-hidden="true">↗</span></span>
-          <span className="documentation-path-description">{description}</span>
-        </Link>
-      ))}
-    </nav>
+    <LinkRows items={paths} label="Start exploring the documentation" />
   );
 }
