@@ -136,6 +136,6 @@ Leadership, role, and membership are application-managed fields rather than one 
 
 Six checked-in Prisma migrations evolve the initial accounts/clubs/events/mentors schema with blogs, testimonials, mentor LinkedIn URLs, Google identity fields, and mentor likes. `migration_lock.toml` identifies PostgreSQL as the provider. The schema describes the current generated client model; migration SQL records the database changes, including deletion actions and unique indexes.
 
-The backend's `db:migrate` script runs `prisma migrate dev`. Deployment does not automatically follow from the presence of migrations; see [Deployment & Configuration](./deployment-configuration.mdx#build-and-start). The [Change the Database Schema guide](../guides/change-the-database-schema.mdx) is reserved for a later phase.
+The backend's `db:migrate` script runs `prisma migrate dev`. Deployment does not automatically follow from the presence of migrations; see [Deployment & Configuration](./deployment-configuration.mdx#build-and-start). Use [Change the Database Schema](../guides/change-the-database-schema.mdx) to plan, review, and verify a migration.
 
 <SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/tree/main/backend/prisma/migrations">backend/prisma/migrations/</SourceReference>

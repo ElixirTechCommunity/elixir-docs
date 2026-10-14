@@ -1,6 +1,179 @@
 ---
 title: Add or Change an API Endpoint
-description: Contributor workflow for changing the current API surface.
+description: Trace a backend route, preserve input and access boundaries, and verify an API change.
 ---
 
-This source-backed contributor guide will be added in a later phase.
+Use this guide when adding a backend operation or changing an existing request or response. Start with a running local backend from [Backend Quickstart](../getting-started/backend-quickstart.mdx), and identify the callers that depend on the current contract.
+
+## Overview
+
+The implemented request path is:
+
+```text
+Express application → Route → Middleware / validation → Controller
+                                                       ↓
+                                                Prisma / PostgreSQL
+                                                       ↓
+                                                  HTTP response
+```
+
+Global middleware runs before route matching. Route middleware can reject a request early; controllers handle business logic, resource-specific checks, persistence when needed, and responses. There is no separate service layer. [Backend Architecture](../architecture/backend-architecture.mdx) explains the full lifecycle.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/app.ts">backend/src/app.ts</SourceReference>
+
+## Step 1 — Locate the relevant domain
+
+Follow an existing operation across these files before editing. Event creation demonstrates validation, role checks, and a database write:
+
+| Responsibility | Existing location |
+| --- | --- |
+| Mount `/events` | `backend/src/app.ts` |
+| Define `POST /` inside that router | `backend/src/routes/events.ts` |
+| Check the request body | `backend/src/validators/events.ts`, `createEventSchema` |
+| Create the record | `backend/src/controllers/eventController.ts`, `createEvent` |
+| Define stored fields | `backend/prisma/schema.prisma`, `Event` |
+
+Search the frontend under `src/` for calls to the affected path and fields. `src/lib/api.ts` supplies a shared Axios client, but some pages also make their own requests; checking that helper alone is insufficient. Record the existing method, input names, response fields, status codes, and access rules using the [Events API](../api-reference/events.mdx).
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/routes/events.ts">backend/src/routes/events.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/src/lib/api.ts">src/lib/api.ts</SourceReference>
+
+## Step 2 — Define or update the route
+
+For an existing domain, edit its router in `backend/src/routes/`; its mount already exists in `app.ts`. A genuinely new domain router also needs an import and mount there. Local resource mounts are `/auth`, `/events`, `/clubs`, `/blogs`, `/mentors`, `/users`, and `/testimonials`, without `/api`.
+
+Choose methods and paths with the existing operation and callers in mind. The current event-creation route is:
+
+```ts title="Excerpt: backend/src/routes/events.ts"
+router.post(
+  "/",
+  authenticateToken,
+  requireRole(["CLUB_HEAD"]),
+  validate(createEventSchema),
+  asyncHandler(createEvent)
+);
+```
+
+Middleware runs in the listed order: authentication, role authorization, validation, then the controller. The users router instead installs authentication and `ADMIN` authorization with `router.use`, applying them to every route. Inspect router-wide middleware as well as the individual handler.
+
+Keep static paths ahead of conflicting dynamic paths for the same method. The blogs router registers `GET /me` and `GET /admin` before `GET /:id`; moving the dynamic route first would treat those names as identifiers.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/routes/users.ts">backend/src/routes/users.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/routes/blogs.ts">backend/src/routes/blogs.ts</SourceReference>
+
+## Step 3 — Add or update validation
+
+Zod schemas live in `backend/src/validators/`. The shared `validate` middleware parses `{ body, query, params }`; a Zod error returns HTTP 400 with `{ message: "Validation error", errors: [...] }`. Other exceptions go to `next(err)`.
+
+<TechnicalDebt>
+The middleware discards the parsed result. Controllers still receive the original request values: defaults, coercions, and removal of unknown properties do not carry through. Do not rely on a schema transformation to normalize controller input or on Zod's unknown-field stripping to prevent that controller reading a field.
+</TechnicalDebt>
+
+Match both the schema and controller when changing inputs. Event creation calls the date input `data`, converts it to `date`, and requires `imageUrl` in the controller even though the schema makes it optional. Club creation uses manual controller checks rather than this middleware. Update the actual checks for your domain and preserve compatibility deliberately.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/middleware/validate.ts">backend/src/middleware/validate.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/validators/events.ts">backend/src/validators/events.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/clubController.ts">backend/src/controllers/clubController.ts</SourceReference>
+
+## Step 4 — Implement controller behavior
+
+Controllers read `req.body`, `req.query`, and `req.params` directly. Protected handlers obtain identity from `req.user.userId` and role from `req.user.role`; `AuthRequest` in the authentication middleware describes these claims, though several existing handlers use `any`.
+
+For event creation, the controller checks required fields, loads the authenticated user's club, and rejects a missing club with HTTP 400. This excerpt shows the write after those checks; it is not a complete handler:
+
+```ts title="Excerpt: createEvent, after required-field and club checks"
+const event = await prisma.event.create({
+  data: {
+    title,
+    description,
+    date: new Date(data),
+    imageUrl,
+    clubId: user.club.id,
+  },
+  include: {
+    club: { select: { name: true, imageUrl: true } },
+  },
+});
+return res.status(201).json({ event });
+```
+
+Select response fields deliberately, including fields brought in by relations. Preserve the existing response envelope unless the contract change is intentional and consumers are updated. Many controllers catch failures locally and return an operation-specific HTTP 500 JSON message. `asyncHandler` forwards uncaught rejections, but `app.ts` has no custom global JSON error handler. Define expected invalid-input, missing-resource, and conflict behavior in the affected handler; do not assume a common error mapper exists.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/eventController.ts">backend/src/controllers/eventController.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/utils/asyncHandler.ts">backend/src/utils/asyncHandler.ts</SourceReference>
+
+## Step 5 — Apply authentication and authorization
+
+Check all three boundaries separately:
+
+- **Authentication:** `authenticateToken` verifies a JWT and attaches identity claims. Missing or invalid tokens return HTTP 401.
+- **Role authorization:** `requireRole` accepts an explicit list of token roles and returns HTTP 403 for other roles. There is no implicit hierarchy: `ADMIN` cannot create an event through the `CLUB_HEAD`-only route.
+- **Resource ownership:** the controller loads the resource and compares persisted ownership. Event update, deletion, and attendee listing compare a club head's current membership with the event's club; admins bypass that comparison.
+
+Authentication alone grants no ownership guarantee. Take the acting identity from the verified token for operations performed on that user's behalf. For ownership changes, inspect both the existing and requested relationship: event update currently checks the old club, then permits a supplied replacement `clubId` without another ownership check.
+
+Role middleware reads the issued token's role, which may differ from the database after a role change. Use fresh sign-in tokens when verifying roles. Read [Authentication & Authorization](../architecture/authentication-authorization.mdx#roles-and-ownership) for the implemented boundaries and token limitations.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/middleware/auth.ts">backend/src/middleware/auth.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/eventController.ts">backend/src/controllers/eventController.ts</SourceReference>
+
+## Step 6 — Handle database access
+
+Follow the affected controller's current Prisma usage. Events, blogs, mentors, and testimonials import `prisma` from `../lib/prisma`. Authentication, clubs, and users each construct a module-level `PrismaClient`; the backend does not have one universal client instance.
+
+Inspect [Data Model](../architecture/data-model.mdx) for required relations, uniqueness, and delete actions before changing a query or write. For dependent writes, check failure and partial-write behavior: club creation and event deletion currently use separate statements. A model change belongs with the [database schema workflow](./change-the-database-schema.mdx).
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/lib/prisma.ts">backend/src/lib/prisma.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/userController.ts">backend/src/controllers/userController.ts</SourceReference>
+
+## Step 7 — Verify the endpoint
+
+Use an isolated local development database with migrations applied, dependencies installed, and `JWT_SECRET` configured. From `ElixirV4/backend/`, start the backend with `npm run dev`. In another terminal, use `curl` or an HTTP client; these requests have no working-directory dependency.
+
+For event creation, obtain a fresh token for an existing `CLUB_HEAD` account associated with a club. Registration creates `STUDENT` accounts; it does not bootstrap an admin or club head. Have an existing local administrator provision role and membership through the [Users API](../api-reference/users.mdx), then sign in again using the [Authentication API](../api-reference/authentication.mdx#password-login). There is no checked-in seed command.
+
+The following is an illustrative request to the **existing** event endpoint. Set `ELIXIR_TOKEN` in your terminal to that local account's token. Replace the port if configured differently; the image URL is an example string.
+
+```sh
+curl -i http://localhost:3001/events \
+  -H "Authorization: Bearer $ELIXIR_TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data '{"title":"Contributor session","description":"A local verification event.","data":"2026-11-01T10:00:00.000Z","imageUrl":"https://example.com/event.png"}'
+```
+
+Expect HTTP 201 and `{ event: ... }`, including a persisted `date` and the account's club. Use the public listing and, optionally, `npm run db:studio` from `backend/` to confirm the stored record. Keep tokens and account data out of PR evidence.
+
+Verify this matrix for the changed operation, adapting expected outcomes to its [API Reference](../api-reference/authentication.mdx):
+
+| Case | Check |
+| --- | --- |
+| Valid request | Status, response envelope, fields, and intended database effect. |
+| Invalid input | Missing, malformed, and unexpected values; rejected requests must not write data. Event titles shorter than three characters return 400. |
+| Missing/invalid token | Protected route returns 401 and does not write. |
+| Disallowed role | Route returns 403. Event creation rejects both `STUDENT` and `ADMIN` tokens. |
+| Ownership | For event update or attendee listing, use a head from another club and expect 403; also check the owning head and admin paths. |
+| Database edge cases | Missing related records, duplicate unique values, repeated requests, and effects on existing records. Do not assume caught database errors return 404 or 409. |
+| Existing callers | Confirm the frontend can still send the request and read the response. |
+
+The backend has no checked-in automated endpoint test suite or `test`, `lint`, or typecheck script. CI runs `npm test --if-present`, which skips tests when the script is absent. `CONTRIBUTING.md` asks for tests for testable changes and regression tests for bug fixes; discuss the missing setup with maintainers rather than presenting manual verification as automated coverage.
+
+From `ElixirV4/backend/`, run `npx tsc --noEmit` for a compilation check and `npm run build` for client generation plus compilation. The build emits files under the current TypeScript configuration; it does not prove `npm run start` works. Record failures honestly and see [build/start limitations](../architecture/deployment-configuration.mdx#build-and-start).
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/package.json">backend/package.json</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/.github/workflows/ci.yml">.github/workflows/ci.yml</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</SourceReference>
+
+## Step 8 — Update related documentation
+
+Update the affected [API Reference](../api-reference/authentication.mdx) page with methods, paths, access rules, input names, responses, errors, and examples. Domain behavior changes may also affect [Clubs, Events & Registrations](../concepts/clubs-events-registrations.mdx) or [Blog Submission & Moderation](../concepts/blog-submission-moderation.mdx). Update Architecture when its described behavior changes, and adjust [Known Limitations](../known-limitations.mdx) when a limitation is introduced or resolved.
+
+These pages live in the separate `elixir-docs` repository. From that repository's root, run `npm run lint`, `npm run types:check`, and `npm run build` after editing documentation.
+
+## Completion checklist
+
+- [ ] Route, middleware order, validators, and affected callers agree on the contract.
+- [ ] Controller input handling accounts for original, untransformed request values.
+- [ ] Authentication, allowed roles, and ownership were checked independently.
+- [ ] Success, invalid input, access failures, and relevant database cases were verified.
+- [ ] Compilation/build checks were run; missing tests and failures are stated.
+- [ ] API examples and related documentation were updated and documentation checks passed.

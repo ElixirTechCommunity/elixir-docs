@@ -1,6 +1,157 @@
 ---
 title: Change the Database Schema
-description: Contributor workflow for safely changing the current Prisma schema.
+description: Plan a Prisma model change, review its SQL migration, regenerate the client, and verify compatibility.
 ---
 
-This source-backed contributor guide will be added in a later phase.
+Use this guide for fields, constraints, relationships, and models in the backend's PostgreSQL database. Complete [Backend Quickstart](../getting-started/backend-quickstart.mdx) first, using a disposable local database.
+
+## Overview
+
+The schema defines the model contract, migration SQL updates PostgreSQL, and the generated Prisma Client exposes that contract to controllers:
+
+```text
+Prisma schema → Migration → PostgreSQL
+       ↓
+Generated Prisma Client → Backend controllers
+```
+
+Changing `schema.prisma` alone does not update an existing database. Generating a client also does not apply migrations. Both database state and generated types must match the application code.
+
+## Step 1 — Locate the schema
+
+Edit `backend/prisma/schema.prisma` in the application repository when implementing a schema change. Its datasource uses PostgreSQL and `DATABASE_URL`; its generator uses `prisma-client-js`. Models use string IDs with `cuid()` defaults and `@@map` for table names. Relations declare their backing fields and referenced identifiers. Read [Data Model](../architecture/data-model.mdx) for the entities and constraints.
+
+Six checked-in migrations live under `backend/prisma/migrations/`. Inspect their SQL as well as the schema, especially for foreign-key deletion actions.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/prisma/schema.prisma">backend/prisma/schema.prisma</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/tree/main/backend/prisma/migrations">backend/prisma/migrations/</SourceReference>
+
+## Step 2 — Plan the change
+
+Trace affected fields through controllers, validators, responses, and frontend consumers before editing. Check:
+
+- Which rows already exist and what value they should have after migration.
+- Required versus optional fields (`?`), defaults, and whether callers send null, omit a field, or send an empty string.
+- `@unique` and `@@unique` constraints, including existing duplicates.
+- Relation fields, foreign keys, and deletion actions for related data.
+- Queries using `select`/`include`, create/update payloads, and returned model scalars.
+
+Do not infer a relationship from a field name: `Club.clubHeadId` is a unique optional scalar with no foreign key. User registrations and blogs restrict user deletion; mentor likes cascade. These details affect migration planning. See [deletion behavior](../architecture/data-model.mdx#deletion-behavior).
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/prisma/migrations/20250829203812_initial_migration/migration.sql">backend/prisma/migrations/20250829203812_initial_migration/migration.sql</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/prisma/migrations/20250901211052_add_blogs/migration.sql">backend/prisma/migrations/20250901211052_add_blogs/migration.sql</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/prisma/migrations/20251025152715_add_mentor_likes/migration.sql">backend/prisma/migrations/20251025152715_add_mentor_likes/migration.sql</SourceReference>
+
+## Step 3 — Modify the Prisma schema
+
+As an **illustrative change**, add an optional `location` field to the existing `Event` model, leaving its other fields unchanged:
+
+```prisma title="Illustrative addition inside model Event"
+location String?
+```
+
+This field does not exist in the inspected application. It demonstrates an additive change following current string/optional-field conventions. Existing events can retain null; decide separately whether new API requests may omit it. Do not edit generated client files by hand.
+
+## Step 4 — Create a migration
+
+Run all commands in this guide from **`ElixirV4/backend/`**, after installing its locked dependencies with `npm ci`. The lockfile resolves both `prisma` and `@prisma/client` to **6.15.0**. Use the package's local CLI after installation rather than fetching a different Prisma version.
+
+Configure `backend/.env` with a development `DATABASE_URL` and start PostgreSQL. Development migration generation uses a shadow database, so the local role needs permission to create it, as described in Quickstart. `--create-only` still needs database access and can encounter drift/reset prompts.
+
+For the illustrative field, generate SQL without applying the new migration immediately:
+
+```sh
+npm run db:migrate -- --name add_event_location --create-only
+```
+
+The script invokes `npx prisma migrate dev`; npm forwards options after `--`. Inspect the new `prisma/migrations/<timestamp>_add_event_location/migration.sql`. For this addition, expect a nullable text column on the mapped `events` table. Confirm the actual generated SQL and absence of unrelated drops or constraint changes.
+
+After reviewing it, apply pending migrations to your local development database:
+
+```sh
+npm run db:migrate
+```
+
+If prompted to reset, stop and investigate drift and the selected database before accepting. Commit the intended schema and new migration together; do not rewrite migrations already applied to shared environments.
+
+<Callout type="warning" title="Protect existing data">
+Development migration commands can request a database reset, and SQL that drops or replaces columns can destroy data. Use a disposable local database for this workflow. Before any destructive change to retained data, review the SQL, backup/recovery plan, and data-preserving migration steps with the people responsible for that environment.
+</Callout>
+
+Deployment uses the Prisma CLI command `npx prisma migrate deploy` to apply already-created migrations. It does not create migrations or generate the client. This is a deployment distinction, not an instruction to deploy now: the repository defines no `db:deploy` script and CI does not apply migrations. [Deployment & Configuration](../architecture/deployment-configuration.mdx#build-and-start) describes what is wired up. Command behavior is documented in the [Prisma v6 CLI reference](https://www.prisma.io/docs/orm/v6/reference/prisma-cli-reference).
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/package.json">backend/package.json</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/package-lock.json">backend/package-lock.json</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/.github/workflows/ci.yml">.github/workflows/ci.yml</SourceReference>
+
+## Step 5 — Regenerate Prisma Client
+
+Run explicitly after the schema/migration change:
+
+```sh
+npm run db:generate
+```
+
+This invokes `npx prisma generate`. Prisma 6 development migrations normally trigger generators, but explicit generation also covers a pulled schema change or a create-only workflow. Client generation writes artifacts, not database rows. Restart the development backend after changing generated types. See the [Prisma v6 CLI reference](https://www.prisma.io/docs/orm/v6/reference/prisma-cli-reference) for generation behavior.
+
+## Step 6 — Update application code
+
+Review controller queries and create/update payloads, Zod or manual validation, relations, returned response shapes, frontend types/forms, and API examples. For the illustrative field, decide which operations accept `location` and whether existing responses should include it. Controllers returning full model scalars can expose a new field even without an explicit response edit.
+
+The validation middleware discards parsed Zod values, so schema defaults/coercions do not become controller inputs. A database default, a Zod default, and a controller fallback have different effects here. Use [Add or Change an API Endpoint](./add-or-change-an-api-endpoint.mdx) for accompanying API work.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/eventController.ts">backend/src/controllers/eventController.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/middleware/validate.ts">backend/src/middleware/validate.ts</SourceReference>
+
+## Step 7 — Verify the change
+
+With backend dependencies installed and the local environment configured, run:
+
+```sh
+npx prisma validate
+npx prisma migrate status
+npm run db:generate
+npx tsc --noEmit
+npm run build
+```
+
+`validate` checks the schema; it does not prove database compatibility. `migrate status` checks migration history against the configured database. Verify the intended SQL was applied and the generated client exposes the changed field. `tsc --noEmit` checks compilation without emitting JavaScript; `build` generates the client and runs emitting compilation. Neither applies migrations. These are valid commands, not a guarantee that the current backend compiles without errors.
+
+Run `npm run dev` and exercise affected endpoints against the migrated database. Optionally use `npm run db:studio` to inspect local data. Check new and existing rows, omitted/null values, required values, duplicate unique keys, missing related records, and delete behavior. For retained-data changes, rehearse against representative sanitized data and compare row counts and important values before and after. The optional `location` example should preserve existing events with a null location.
+
+The backend has no checked-in endpoint test suite or test script, so record manual requests, outcomes, and database observations explicitly. Do not use `/health` alone as migration verification: it performs no query. The build/start output mismatch also means compilation success alone does not verify production startup.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/tsconfig.json">backend/tsconfig.json</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/app.ts">backend/src/app.ts</SourceReference>
+
+## Step 8 — Review migration safety
+
+These are general migration-review recommendations applied to this schema; the repository has no automated migration-review job.
+
+| Change | Review before applying |
+| --- | --- |
+| Add a required field | Existing rows need a value. Plan a default or staged nullable field, backfill, and later required constraint. |
+| Add/change uniqueness | Check existing duplicates and how callers handle conflicts. |
+| Delete a column/model | Identify lost data, dependent code, and recovery requirements. |
+| Rename a field | Inspect SQL: a generated drop/add can lose values. Use a deliberate data-preserving SQL rename when appropriate, considering `@map`/`@@map` when the database name should stay unchanged. |
+| Change a relation/delete action | Check existing foreign-key values and which rows would restrict, cascade, or become null. |
+| Change a type or default | Verify conversions, existing values, and whether old and new application versions can operate during rollout. |
+
+Review both a fresh installation and an upgrade with existing rows. Reverting application code does not restore dropped data; describe recovery and rollout ordering in the PR. `CONTRIBUTING.md` asks contributors to explain migrations, account for existing production data, and test against realistic data.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</SourceReference>
+
+## Step 9 — Document the change
+
+Update [Data Model](../architecture/data-model.mdx), affected [API Reference](../api-reference/authentication.mdx) pages and examples, and relevant [Concepts](../concepts/clubs-events-registrations.mdx). Update [Deployment & Configuration](../architecture/deployment-configuration.mdx) when operational requirements change and [Known Limitations](../known-limitations.mdx) when a documented constraint changes.
+
+Include migration purpose, data compatibility, verification evidence, and rollout/recovery considerations in the application PR. Documentation lives in `elixir-docs`; run `npm run lint`, `npm run types:check`, and `npm run build` from its root after editing pages.
+
+## Completion checklist
+
+- [ ] Models, consumers, existing data, uniqueness, relations, and deletion actions were inspected.
+- [ ] Schema and migration agree; generated SQL was reviewed for destructive or unrelated changes.
+- [ ] Migration succeeded locally and existing data compatibility was checked.
+- [ ] Prisma validation, migration status, client generation, and compilation/build checks were run.
+- [ ] Affected API behavior, constraints, and frontend consumers were verified; failures are recorded.
+- [ ] PR explains migration safety and documentation updates; documentation checks passed.

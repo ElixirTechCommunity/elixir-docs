@@ -125,7 +125,7 @@ The relevant code and configuration establish the following:
 3. `backend/vercel.json` contains header rules for `/api/(.*)`, with no routes or rewrites. Its static origin header is a comma-separated list, unlike Express's single echoed origin; configuration presence does not prove what header a deployed response ultimately serves.
 4. The frontend joins paths such as `/auth/me` to `NEXT_PUBLIC_API_URL`, defaulting locally to `http://localhost:3001`. `next.config.ts` has no API rewrite. An example environment value does not establish the deployed value or resolve the wrapper mismatch.
 
-The repository does not include hosted project settings or verified production request traces. The precise public dispatch, request URL seen by the wrappers, and effective response headers therefore remain unresolved here. This page documents the checked-in code path, not a guessed `/api/*` contract. The future [Known Limitations](../known-limitations.mdx) page will centralize architectural issues.
+The repository does not include hosted project settings or verified production request traces. The precise public dispatch, request URL seen by the wrappers, and effective response headers therefore remain unresolved here. This page documents the checked-in code path, not a guessed `/api/*` contract. [Known Limitations](../known-limitations.mdx) indexes this uncertainty alongside other implementation constraints.
 
 <SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/api/index.ts">backend/api/index.ts</SourceReference>
 <SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/api/%5B...all%5D.ts">backend/api/[...all].ts</SourceReference>

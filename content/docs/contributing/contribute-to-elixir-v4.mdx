@@ -1,6 +1,93 @@
 ---
 title: Contribute to ElixirV4
-description: How to contribute to ElixirV4 and keep implementation documentation accurate.
+description: Orient yourself in the application, verify a focused change, and prepare a reviewable pull request.
 ---
 
-This page will describe the verified contribution workflow in a later phase.
+Contribute a focused change by tracing the existing behavior, checking its callers, and providing evidence that it works. This page connects the application repository's contribution instructions to the backend workflows documented here.
+
+## Project orientation
+
+[ElixirV4](https://github.com/vaibhavxtripathi/ElixirV4) contains a Next.js frontend at the root and a separate Express/TypeScript backend under `backend/`. The backend uses Prisma and PostgreSQL for accounts, clubs, events, registrations, blogs, mentors, and testimonials.
+
+The developer handbook lives in [elixir-docs](https://github.com/ElixirTechCommunity/elixir-docs), a separate Next.js/Fumadocs repository. Application code and contribution rules remain authoritative; these pages explain the implemented behavior and how to work with it. Submit implementation changes to ElixirV4 and handbook changes to elixir-docs, linking related PRs when both are affected.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/package.json">backend/package.json</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</SourceReference>
+
+## Before you start
+
+Read the current [CONTRIBUTING.md](https://github.com/vaibhavxtripathi/ElixirV4/blob/main/CONTRIBUTING.md) and follow [Backend Quickstart](../getting-started/backend-quickstart.mdx) for Git, Node.js/npm, PostgreSQL, local environment configuration, dependency installation, and startup. The backend's locked Prisma packages require Node.js 18.18 or newer; CI selects Node.js 20. Root frontend commands and backend commands run in different package directories.
+
+The contribution instructions ask you to search existing issues and PRs, check for overlapping work, and open an issue before implementing a non-trivial change. They also require a working branch rather than development directly on `main`. Keep credentials and private data out of issues, commits, logs, and review evidence.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/package-lock.json">backend/package-lock.json</SourceReference>
+
+## Find an area to contribute
+
+Browse [existing issues](https://github.com/vaibhavxtripathi/ElixirV4/issues) and [pull requests](https://github.com/vaibhavxtripathi/ElixirV4/pulls), then reproduce or describe the behavior before choosing an implementation. No particular issue label or triage process is assumed here.
+
+For backend work, start with the relevant router in `backend/src/routes/`, follow its middleware and controller in `backend/src/controllers/`, and inspect validators in `backend/src/validators/`. Database work starts at `backend/prisma/schema.prisma` and its migrations. Search frontend consumers under `src/` for affected paths and fields.
+
+Use [Backend Architecture](../architecture/backend-architecture.mdx) for execution flow, the [API Reference](../api-reference/authentication.mdx) for current contracts, and [Known Limitations](../known-limitations.mdx) for verified constraints that may explain unexpected behavior. Limitations are context for investigation, not a commitment to a particular roadmap.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/tree/main/backend/src">backend/src/</SourceReference>
+
+## Development workflow
+
+This sequence is a practical workflow. Explicit repository requirements are identified above and in the PR guidance below.
+
+1. **Inspect the issue or behavior.** Reproduce it, read the request path, identify consumers, and agree on scope for non-trivial work.
+2. **Create a focused branch.** From the ElixirV4 root, `git switch -c fix/event-validation` is an illustrative branch command; choose a name describing your change. The repository recommends `<type>/<short-description>`.
+3. **Implement the change.** Follow [Add or Change an API Endpoint](../guides/add-or-change-an-api-endpoint.mdx) or [Change the Database Schema](../guides/change-the-database-schema.mdx) as appropriate. Keep unrelated refactors and dependency upgrades separate.
+4. **Verify behavior.** Exercise success, invalid input, access restrictions, and relevant database cases. `CONTRIBUTING.md` requests tests for testable code, regression tests for fixes, and a 90%+ coverage target for code requiring tests. There is currently no checked-in backend test suite, test script, or coverage tooling; coordinate that gap with maintainers and report manual evidence accurately.
+5. **Run available checks.** Use the correct package context below. Record commands and outcomes, including existing failures, rather than treating a green optional-test job as backend coverage.
+6. **Update documentation.** Change request/response examples and affected handbook pages. If both repositories need changes, link their PRs and make compatibility requirements explicit.
+7. **Prepare a PR.** Review the full diff, explain the behavior and verification, and keep it in Draft until ready under the repository's contribution instructions.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</SourceReference>
+
+## Project commands
+
+Use these after installing dependencies in the relevant package. Backend runtime and migration commands also need local configuration; see Quickstart instead of copying production values from `env.example`.
+
+| Command | Working directory | Purpose |
+| --- | --- | --- |
+| `npm ci` | `ElixirV4/backend/` | Install the backend lockfile dependencies. |
+| `npm run dev` | `ElixirV4/backend/` | Start nodemon/ts-node; local port defaults to 3001. |
+| `npm run db:generate` | `ElixirV4/backend/` | Generate Prisma Client. |
+| `npm run db:migrate` | `ElixirV4/backend/` | Create/apply development migrations; use only a development database. |
+| `npm run db:studio` | `ElixirV4/backend/` | Open Prisma Studio for local inspection. |
+| `npx tsc --noEmit` | `ElixirV4/backend/` | Direct TypeScript compilation check; no backend typecheck script exists. |
+| `npm run build` | `ElixirV4/backend/` | Generate Prisma Client and compile TypeScript. |
+| `npm run lint`, `npm run type-check`, `npm run build` | `ElixirV4/` | Root frontend checks requested by CONTRIBUTING.md. |
+| `npm run lint`, `npm run types:check`, `npm run build` | `elixir-docs/` | Handbook checks after documentation edits. |
+
+Backend `npm run start` is defined as `node dist/server.js`, but the current TypeScript config does not set that output directory. See [Deployment & Configuration](../architecture/deployment-configuration.mdx#build-and-start) before relying on it.
+
+<TechnicalDebt>
+`CONTRIBUTING.md` lists `npm run dev:backend`, which the root package does not define. Use `npm run dev` inside `backend/`. The root checks are frontend checks; the backend has no lint, typecheck, or test script. Backend CI installs dependencies and runs `npm test --if-present`, without compiling the backend or applying migrations.
+</TechnicalDebt>
+
+The contribution file also places detailed documentation in `/docs` and names a public documentation destination. This handbook is maintained in the separate elixir-docs repository; those statements do not establish its deployed state or move these pages into ElixirV4.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/package.json">package.json</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/package.json">backend/package.json</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/tsconfig.json">backend/tsconfig.json</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/.github/workflows/ci.yml">.github/workflows/ci.yml</SourceReference>
+
+## Pull request expectations
+
+Make the PR easy to review with a focused diff, a clear description of what changed and why, reproduction steps for a bug, affected consumers, and verification evidence. Include exact commands, manual request outcomes, and known failures. For schema changes, explain the SQL, existing-data compatibility, rollout ordering, and recovery considerations. For UI changes, include useful screenshots or before/after evidence without tokens or private data.
+
+These are practical review recommendations supported by `CONTRIBUTING.md`. Its explicit instructions include keeping unfinished PRs in Draft, completing self-review and documentation before requesting review, passing CI, and including a Loom walkthrough for code changes when visual or contextual explanation helps. Documentation-only and genuinely minor changes do not require Loom. Do not claim that CI enforces every contribution expectation: the checked-in workflow runs frontend lint/typecheck/build and the backend optional-test command described above.
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</SourceReference>
+
+## Where to go next
+
+- [Backend Quickstart](../getting-started/backend-quickstart.mdx) — set up and verify a local backend.
+- [Backend Architecture](../architecture/backend-architecture.mdx) — trace execution boundaries.
+- [Add or Change an API Endpoint](../guides/add-or-change-an-api-endpoint.mdx) — change a request contract and verify access.
+- [Change the Database Schema](../guides/change-the-database-schema.mdx) — review migrations and data compatibility.
+- [API Reference](../api-reference/authentication.mdx) — find route-specific inputs and responses.
+- [Known Limitations](../known-limitations.mdx) — account for current behavior and operational uncertainty.

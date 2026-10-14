@@ -61,7 +61,7 @@ The application mounts resource routers at `/auth`, `/events`, `/clubs`, `/blogs
 
 Each router imports controllers and composes its own middleware. Most protected routes list authentication and role checks individually; the users router applies authentication and `ADMIN` authorization to the whole router. Static blog paths such as `/admin` and `/me` are registered before `/:id` so that they reach the intended controller.
 
-Read both the router and controller when changing behavior. The [Add or Change an API Endpoint guide](../guides/add-or-change-an-api-endpoint.mdx) and [API Reference](../api-reference/authentication.mdx) are reserved for later phases.
+Read both the router and controller when changing behavior. Use [Add or Change an API Endpoint](../guides/add-or-change-an-api-endpoint.mdx) for the contributor workflow and the [API Reference](../api-reference/authentication.mdx) for route-specific contracts.
 
 <SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/tree/main/backend/src/routes">backend/src/routes/</SourceReference>
 

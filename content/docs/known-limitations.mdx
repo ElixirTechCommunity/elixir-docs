@@ -1,10 +1,148 @@
 ---
 title: Known Limitations
-description: Current implementation limitations that affect developers.
+description: Verified runtime constraints, maintainability concerns, and deployment uncertainties in the current backend.
 ---
 
-This page will consolidate source-backed limitations as they are documented. It intentionally makes no unverified claims in this foundation phase.
+Use this index when a contribution depends on authentication, database invariants, response contracts, or deployment behavior. Each entry describes the current implementation and links to details; it is not a fix roadmap or a severity assessment.
 
-<TechnicalDebt>
-Use this callout when a page describes behavior that exists today and has a known implementation limitation. State the current behavior, the limitation, and the developer impact without presenting a proposed fix as implemented.
-</TechnicalDebt>
+These limitations were checked against ElixirV4 revision `76b958a17fd864923ec7616757d7946560ef5195`. Runtime behavior, maintainability concerns, and deployment uncertainty are distinguished in the descriptions. Source links follow the handbook's `main`-branch convention; recheck the implementation when updating or removing an entry.
+
+## Authentication & security
+
+### Token claims can outlive account changes
+
+- **Current behavior:** Seven-day JWTs carry `userId`, `email`, and `role`. Shared authentication verifies the token without loading the account; role middleware uses the token role. There is no application refresh/revocation route or server-side logout invalidation. `/auth/me` reloads a user but does not replace the JWT.
+- **Impact:** Role changes or account deletion do not invalidate an issued token through shared middleware. Individual controller/database checks still apply; do not assume every protected route checks current account state.
+- **Further reading:** [JWT identity](./architecture/authentication-authorization.mdx#jwt-identity).
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/utils/jwt.ts">backend/src/utils/jwt.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/middleware/auth.ts">backend/src/middleware/auth.ts</SourceReference>
+
+### OAuth state checks do not validate every state field
+
+- **Current behavior:** Browser OAuth compares a state nonce with a cookie, but the callback does not sign or allowlist the state's frontend origin/destination. It only checks that the selected frontend URL is nonempty before building the redirect. The application JWT appears in the redirect query string.
+- **Impact:** Nonce matching does not establish the trustworthiness of the other state fields. Query-string token transport requires care around URL history and logging. These are verified trust/transport behaviors, not a claim of a demonstrated exploit or incident.
+- **Further reading:** [Google browser OAuth](./architecture/authentication-authorization.mdx#google-browser-oauth).
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/authController.ts">backend/src/controllers/authController.ts</SourceReference>
+
+### Rate-limit keys are not verified identities
+
+- **Current behavior:** The global limiter uses `userId` decoded from an unverified bearer payload. Its fallback passes the request object to `ipKeyGenerator` rather than an IP string; Express also trusts one proxy hop.
+- **Impact:** Do not treat the limiter's bucket identity as authentication or assume the intended per-IP fallback works. The proxy setting needs to match hosting topology; deployed behavior and exploitability have not been established here.
+- **Further reading:** [Request lifecycle](./architecture/backend-architecture.mdx#request-lifecycle).
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/app.ts">backend/src/app.ts</SourceReference>
+
+## Data integrity
+
+### Leadership, membership, and role can diverge
+
+- **Current behavior:** `Club.clubHeadId` is a unique optional scalar without a foreign key. Club creation writes the club and then updates the user's role/membership in separate statements. User administration can change role or membership without synchronizing leadership.
+- **Impact:** The database does not enforce one leadership invariant or clear a deleted user's leadership scalar. Event ownership follows current membership, so `clubHeadId` alone cannot predict access; partial writes can also leave inconsistent state.
+- **Further reading:** [Club leadership and membership](./architecture/data-model.mdx#club-leadership-and-membership), [Membership and leadership](./concepts/clubs-events-registrations.mdx#membership-and-leadership).
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/prisma/schema.prisma">backend/prisma/schema.prisma</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/clubController.ts">backend/src/controllers/clubController.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/userController.ts">backend/src/controllers/userController.ts</SourceReference>
+
+### User deletion is restricted by registrations and blogs
+
+- **Current behavior:** User deletion directly calls Prisma delete, despite a comment claiming cascades. Registration and blog foreign keys use `ON DELETE RESTRICT`; only mentor likes cascade. A restricted delete reaches the controller's HTTP 500 catch response.
+- **Impact:** Accounts with registrations or authored blogs cannot be removed through that operation. Reason from the migration constraints rather than the controller comment.
+- **Further reading:** [Deletion behavior](./architecture/data-model.mdx#deletion-behavior), [Delete a user](./api-reference/users.mdx#delete-a-user).
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/prisma/migrations/20250829203812_initial_migration/migration.sql">backend/prisma/migrations/20250829203812_initial_migration/migration.sql</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/prisma/migrations/20250901211052_add_blogs/migration.sql">backend/prisma/migrations/20250901211052_add_blogs/migration.sql</SourceReference>
+
+### Event reassignment checks the existing club only
+
+- **Current behavior:** A club head updating an event must belong to its current club, but can then supply another `clubId`. The controller does not perform a second ownership check on the destination club; the foreign key requires that club to exist.
+- **Impact:** Passing the initial ownership check does not confine the update to the current club. Account for reassignment explicitly when changing event access or callers.
+- **Further reading:** [Events belong to clubs](./concepts/clubs-events-registrations.mdx#events-belong-to-clubs), [Update an event](./api-reference/events.mdx#update-an-event).
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/eventController.ts">backend/src/controllers/eventController.ts</SourceReference>
+
+## Backend architecture
+
+### Prisma lifecycle covers only the shared client
+
+- **Current behavior:** Events, blogs, mentors, and testimonials share `src/lib/prisma.ts`; authentication, clubs, and users construct separate module-level clients. Local startup and `SIGTERM` handling connect/disconnect only the shared client; serverless wrappers do not run that lifecycle.
+- **Impact:** This is a connection-management and maintainability concern. Do not infer application-wide pooling or cleanup from the shared helper; no connection-exhaustion incident is established here.
+- **Further reading:** [Controllers and persistence](./architecture/backend-architecture.mdx#controllers-and-persistence), [Prisma lifecycle](./architecture/deployment-configuration.mdx#prisma-lifecycle).
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/lib/prisma.ts">backend/src/lib/prisma.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/server.ts">backend/src/server.ts</SourceReference>
+
+### Error handling has no uniform application boundary
+
+- **Current behavior:** Controllers usually catch database failures as operation-specific HTTP 500 responses. Mentor listing instead catches failures as HTTP 200 with `{ mentors: [] }`. Escaped errors reach Express defaults because no custom global error handler is registered.
+- **Impact:** Empty mentor results can hide a failed query; clients cannot assume a consistent JSON error format or a missing-record-to-404 mapping.
+- **Further reading:** [Responses and errors](./architecture/backend-architecture.mdx#responses-and-errors), [List mentors](./api-reference/mentors.mdx#list-mentors).
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/mentorController.ts">backend/src/controllers/mentorController.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/app.ts">backend/src/app.ts</SourceReference>
+
+### Backend checks do not implement the stated testing expectations
+
+- **Current behavior:** `CONTRIBUTING.md` asks for tests and coverage, but the backend has no checked-in test suite, test/coverage tooling, or test script. Backend CI installs dependencies and runs `npm test --if-present`; it does not run a backend build or migrations.
+- **Impact:** CI success supplies no endpoint, coverage, migration, or backend compilation evidence. Contributors need to state the checks actually performed and coordinate test setup when required.
+- **Further reading:** [Contribution workflow](./contributing/contribute-to-elixir-v4.mdx#development-workflow), [Endpoint verification](./guides/add-or-change-an-api-endpoint.mdx#step-7--verify-the-endpoint).
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/package.json">backend/package.json</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/.github/workflows/ci.yml">.github/workflows/ci.yml</SourceReference>
+
+## Configuration & deployment
+
+### Environment examples do not express runtime precedence
+
+- **Current behavior:** OAuth frontend destination precedence is `NEXT_PUBLIC_FRONTEND_BASE_URL` → `FRONTEND_BASE_URL` → `FRONTEND_URL`. `backend/env.example` omits the first alias and includes frontend-only `NEXT_PUBLIC_API_URL`. Backend and frontend are separate processes.
+- **Impact:** An earlier alias can override an expected value, and setting the frontend API URL only in `backend/.env` does not configure the frontend.
+- **Further reading:** [OAuth destinations](./architecture/deployment-configuration.mdx#oauth-destinations).
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/env.example">backend/env.example</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/authController.ts">backend/src/controllers/authController.ts</SourceReference>
+
+### Build output does not match the start script
+
+- **Current behavior:** Backend build runs `prisma generate && tsc`; `start` runs `node dist/server.js`. TypeScript's `rootDir` and `outDir` are commented out, so compilation does not establish that `dist/` artifact. `CONTRIBUTING.md` also lists a nonexistent root `dev:backend` script.
+- **Impact:** Script names do not establish a working build/start path. Use the verified development package context, and distinguish compilation from startup verification.
+- **Further reading:** [Build and start](./architecture/deployment-configuration.mdx#build-and-start), [Project commands](./contributing/contribute-to-elixir-v4.mdx#project-commands).
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/package.json">backend/package.json</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/tsconfig.json">backend/tsconfig.json</SourceReference>
+
+### Public Vercel routing remains unverified
+
+- **Current behavior:** Serverless wrappers retain/add `/api`, while Express mounts unprefixed routes. Checked-in Vercel configuration contains headers but no reconciling rewrite; its static allowed-origin value is a comma-separated list. Hosted settings and production request traces are absent.
+- **Impact:** This is deployment uncertainty, not a confirmed production outage. Local routes do not prove public URLs or effective CORS headers; verify the hosted dispatch before documenting a production contract.
+- **Further reading:** [Production routing](./architecture/deployment-configuration.mdx#production-routing).
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/api/%5B...all%5D.ts">backend/api/[...all].ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/vercel.json">backend/vercel.json</SourceReference>
+
+## API consistency
+
+### Validation and persistence requirements differ
+
+- **Current behavior:** Shared Zod middleware discards parsed values; validation coverage varies by domain. Event/mentor creation schemas allow omitted `imageUrl`, while controllers require it and `Mentor.imageUrl` is a required database field. `DELETE /users/:userId/club` uses a schema requiring `params.id`, so ordinary requests fail validation before the removal controller.
+- **Impact:** A schema alone does not define the effective input contract. Normalization does not carry through, and the club-removal route is blocked by its parameter mismatch.
+- **Further reading:** [Validation](./architecture/backend-architecture.mdx#validation), [Create a mentor](./api-reference/mentors.mdx#create-a-mentor), [Remove club membership](./api-reference/users.mdx#remove-club-membership).
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/middleware/validate.ts">backend/src/middleware/validate.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/validators/mentors.ts">backend/src/validators/mentors.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/routes/users.ts">backend/src/routes/users.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/validators/blogs.ts">backend/src/validators/blogs.ts</SourceReference>
+
+### Field names and response envelopes vary
+
+- **Current behavior:** Event requests name their date field `data`, while responses use `date`. Registration and `/auth/me` return user `id`; password/Google login return `userId`. Event lists return `{ events, pagination }`, while testimonial lists return `{ items, page, limit, total }`.
+- **Impact:** Consumers need endpoint-specific mappings; a universal identity or pagination envelope would misread existing responses.
+- **Further reading:** [Authentication API conventions](./api-reference/authentication.mdx#reference-conventions), [Events API](./api-reference/events.mdx), [Testimonials API](./api-reference/testimonials.mdx).
+
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/authController.ts">backend/src/controllers/authController.ts</SourceReference>
+<SourceReference href="https://github.com/vaibhavxtripathi/ElixirV4/blob/main/backend/src/controllers/testimonialController.ts">backend/src/controllers/testimonialController.ts</SourceReference>
+
+## Maintaining this index
+
+When behavior changes, recheck its route, middleware, controller, schema, migrations, and configuration. Update the detailed page and this entry together, removing resolved limitations. Do not promote deployment uncertainty into a defect without runtime evidence or turn an absent feature into a promised fix.
